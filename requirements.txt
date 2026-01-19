@@ -2,6 +2,9 @@
 requests>=2.31.0
 python-dotenv>=1.0.0
 
+# Web interface
+streamlit>=1.29.0
+
 # Web Technology Detection
 webtech>=1.3.0
 
