@@ -228,6 +228,7 @@ class PromptParser:
         # Also check against common terms
         business_terms = {
             "tienda online": "ecommerce",
+            "tienda de": "ecommerce",
             "tienda virtual": "ecommerce",
             "shop": "ecommerce",
             "store": "ecommerce",
@@ -239,6 +240,7 @@ class PromptParser:
             "consultora": "agencia",
             "envio directo": "dropshipping",
             "sin stock": "dropshipping",
+            "negocio dropshipping": "dropshipping",
             "web corporativa": "corporativo",
             "pagina empresa": "corporativo"
         }
