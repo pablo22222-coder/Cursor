@@ -167,20 +167,24 @@ class DomainValidator:
         
         # Verificar indicadores de tipo de negocio en contenido
         if intent.business_type == BusinessType.ECOMMERCE:
-            ecommerce_words = ["comprar", "tienda", "carrito", "envío", "productos", "shop", "store"]
+            ecommerce_words = ["comprar", "tienda", "carrito", "envío", "productos", "shop", "store", "precio", "añadir"]
+            found_count = 0
             for word in ecommerce_words:
                 if word in content:
-                    score += 5
-                    reasons.append(f"Palabra clave '{word}' encontrada")
-                    break
+                    found_count += 1
+            if found_count > 0:
+                score += min(found_count * 5, 15)
+                reasons.append(f"Indicadores de ecommerce encontrados ({found_count})")
         
         elif intent.business_type == BusinessType.AGENCY:
-            agency_words = ["servicios", "portfolio", "proyectos", "agencia", "equipo"]
+            agency_words = ["servicios", "portfolio", "proyectos", "agencia", "equipo", "clientes", "contacto", "presupuesto"]
+            found_count = 0
             for word in agency_words:
                 if word in content:
-                    score += 5
-                    reasons.append(f"Palabra clave '{word}' encontrada")
-                    break
+                    found_count += 1
+            if found_count > 0:
+                score += min(found_count * 5, 15)
+                reasons.append(f"Indicadores de agencia encontrados ({found_count})")
         
         elif intent.business_type == BusinessType.SAAS:
             saas_words = ["pricing", "plans", "demo", "trial", "features", "software"]

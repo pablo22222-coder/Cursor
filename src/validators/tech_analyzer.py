@@ -83,39 +83,134 @@ class TechAnalyzer:
         Returns:
             TechStack con las tecnologías detectadas, o None si falla
         """
-        wt = self._get_webtech()
-        if wt is None:
-            return None
-        
         try:
             # Asegurar que la URL tiene protocolo
             if not url.startswith(('http://', 'https://')):
                 url = f"https://{url}"
             
-            # Realizar análisis
-            results = wt.start_from_url(url, timeout=self.timeout)
+            # Limpiar URL de parámetros problemáticos
+            if '?' in url:
+                base_url = url.split('?')[0]
+            else:
+                base_url = url
             
-            return self._parse_results(results)
+            # Crear nueva instancia para cada análisis
+            from webtech import WebTech
+            wt_instance = WebTech()
+            
+            # Realizar análisis - WebTech devuelve un string formateado
+            results = wt_instance.start_from_url(base_url, timeout=self.timeout)
+            
+            return self._parse_string_results(results)
             
         except Exception as e:
-            print(f"Error analizando {url}: {e}")
+            # Silenciar errores para no llenar la consola
             return None
     
-    def _parse_results(self, results: Dict[str, Any]) -> TechStack:
+    def _parse_string_results(self, results: str) -> TechStack:
+        """
+        Parsea los resultados de WebTech que vienen como string formateado.
+        
+        El formato típico es:
+        Target URL: https://example.com
+        Detected technologies:
+            - Shopify
+            - Google Analytics
+        """
+        import re
+        
+        tech_stack = TechStack()
+        tech_names = []
+        
+        if not isinstance(results, str):
+            results = str(results)
+        
+        # Buscar la sección "Detected technologies:"
+        lines = results.split('\n')
+        in_tech_section = False
+        
+        for line in lines:
+            if 'Detected technologies:' in line:
+                in_tech_section = True
+                continue
+            
+            if in_tech_section:
+                # Las tecnologías vienen con formato "	- Nombre "
+                if line.strip().startswith('-'):
+                    tech_name = line.strip()[1:].strip()
+                    if tech_name:
+                        tech_names.append(tech_name.lower())
+                elif line.strip() and not line.strip().startswith('-'):
+                    # Fin de la sección de tecnologías
+                    if 'Detected the following' in line or 'custom headers' in line:
+                        in_tech_section = False
+        
+        # Guardar todas las tecnologías
+        tech_stack.all_technologies = {"detected": tech_names}
+        
+        # Clasificar tecnologías
+        for name in tech_names:
+            name_lower = name.lower()
+            
+            # Detectar CMS
+            for cms in self.CMS_LIST:
+                if cms in name_lower:
+                    tech_stack.cms = name
+                    break
+            
+            # Detectar plataforma ecommerce
+            for platform in self.ECOMMERCE_PLATFORMS:
+                if platform in name_lower:
+                    tech_stack.ecommerce_platform = name
+                    break
+            
+            # Detectar procesadores de pago
+            for processor in self.PAYMENT_PROCESSORS:
+                if processor in name_lower:
+                    if name not in tech_stack.payment_processors:
+                        tech_stack.payment_processors.append(name)
+            
+            # Detectar analytics
+            for analytics in self.ANALYTICS_TOOLS:
+                if analytics in name_lower:
+                    if name not in tech_stack.analytics:
+                        tech_stack.analytics.append(name)
+            
+            # Detectar email marketing
+            for email_tool in self.EMAIL_MARKETING:
+                if email_tool in name_lower:
+                    if name not in tech_stack.email_marketing:
+                        tech_stack.email_marketing.append(name)
+        
+        return tech_stack
+    
+    def _parse_results(self, results) -> TechStack:
         """Parsea los resultados de WebTech a TechStack."""
         tech_stack = TechStack()
         
-        # Obtener lista de tecnologías detectadas
-        techs = results.get("tech", [])
+        # WebTech puede devolver diferentes formatos
+        # Intentamos obtener la lista de tecnologías
+        techs = []
+        
+        if isinstance(results, dict):
+            techs = results.get("tech", [])
+        elif hasattr(results, 'techs'):
+            # Si es un objeto WebTech
+            techs = results.techs
+        elif hasattr(results, '__iter__'):
+            techs = list(results)
         
         # Normalizar nombres a minúsculas para comparación
         tech_names = []
         for tech in techs:
             if isinstance(tech, dict):
                 name = tech.get("name", "").lower()
+            elif hasattr(tech, 'name'):
+                name = str(tech.name).lower()
             else:
                 name = str(tech).lower()
-            tech_names.append(name)
+            if name:
+                tech_names.append(name)
         
         # Guardar todas las tecnologías raw
         tech_stack.all_technologies = {"detected": tech_names}
