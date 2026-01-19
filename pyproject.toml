@@ -1,0 +1,13 @@
+[project]
+name = "prompt-domain-finder"
+version = "1.0.0"
+description = "Prompt-driven domain discovery and validation"
+requires-python = ">=3.9"
+
+[tool.black]
+line-length = 100
+target-version = ["py39"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
