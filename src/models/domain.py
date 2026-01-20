@@ -43,8 +43,17 @@ class PromptIntent:
     # Métricas específicas que el usuario quiere analizar
     metrics_to_analyze: List[str] = field(default_factory=list)
     
-    # El prompt original
+    # El prompt original (sin limpiar)
     original_prompt: str = ""
+    
+    # El prompt limpio (sin palabras de relleno)
+    cleaned_prompt: str = ""
+    
+    # Exclusiones: tecnologías/características que NO quiere (ej: "sin mailchimp")
+    exclusions: List[str] = field(default_factory=list)
+    
+    # Requisitos: tecnologías/características que SÍ quiere (ej: "con shopify")
+    requirements: List[str] = field(default_factory=list)
     
     # Queries de búsqueda generadas
     search_queries: List[str] = field(default_factory=list)

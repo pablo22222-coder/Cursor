@@ -102,13 +102,102 @@ class DomainValidator:
                 match_score += metrics_score
                 match_reasons.extend(metrics_reasons)
         
+        # 4. Aplicar exclusiones (penalizar si tiene tecnología excluida)
+        if intent.exclusions and analysis.tech_stack:
+            exclusion_score, exclusion_reasons = self._apply_exclusions(
+                analysis.tech_stack, intent.exclusions
+            )
+            match_score += exclusion_score  # Será negativo si encuentra exclusiones
+            match_reasons.extend(exclusion_reasons)
+        
+        # 5. Aplicar requisitos (bonus si tiene tecnología requerida)
+        if intent.requirements and analysis.tech_stack:
+            requirement_score, requirement_reasons = self._apply_requirements(
+                analysis.tech_stack, intent.requirements
+            )
+            match_score += requirement_score
+            match_reasons.extend(requirement_reasons)
+        
         # Determinar si cumple el prompt
-        analysis.match_score = min(match_score, 100)
+        analysis.match_score = max(0, min(match_score, 100))  # Entre 0 y 100
         analysis.match_reasons = match_reasons
         analysis.matches_prompt = match_score >= 30
         
         domain.analysis = analysis
         return domain
+    
+    def _apply_exclusions(
+        self,
+        tech_stack: TechStack,
+        exclusions: List[str]
+    ) -> Tuple[int, List[str]]:
+        """
+        Penaliza dominios que tienen tecnologías excluidas.
+        
+        Args:
+            tech_stack: Tecnologías detectadas
+            exclusions: Lista de tecnologías a excluir
+            
+        Returns:
+            Tuple de (puntuación negativa, razones)
+        """
+        score = 0
+        reasons = []
+        
+        # Obtener todas las tecnologías como string para buscar
+        all_techs = " ".join(tech_stack.all_technologies.get("detected", [])).lower()
+        
+        # También incluir campos específicos
+        if tech_stack.cms:
+            all_techs += " " + tech_stack.cms.lower()
+        if tech_stack.ecommerce_platform:
+            all_techs += " " + tech_stack.ecommerce_platform.lower()
+        all_techs += " " + " ".join(tech_stack.payment_processors).lower()
+        all_techs += " " + " ".join(tech_stack.analytics).lower()
+        all_techs += " " + " ".join(tech_stack.email_marketing).lower()
+        
+        for exclusion in exclusions:
+            if exclusion.lower() in all_techs:
+                score -= 50  # Penalización fuerte
+                reasons.append(f"⛔ Tiene {exclusion} (excluido)")
+        
+        return score, reasons
+    
+    def _apply_requirements(
+        self,
+        tech_stack: TechStack,
+        requirements: List[str]
+    ) -> Tuple[int, List[str]]:
+        """
+        Premia dominios que tienen tecnologías requeridas.
+        
+        Args:
+            tech_stack: Tecnologías detectadas
+            requirements: Lista de tecnologías requeridas
+            
+        Returns:
+            Tuple de (puntuación positiva, razones)
+        """
+        score = 0
+        reasons = []
+        
+        # Obtener todas las tecnologías como string para buscar
+        all_techs = " ".join(tech_stack.all_technologies.get("detected", [])).lower()
+        
+        if tech_stack.cms:
+            all_techs += " " + tech_stack.cms.lower()
+        if tech_stack.ecommerce_platform:
+            all_techs += " " + tech_stack.ecommerce_platform.lower()
+        all_techs += " " + " ".join(tech_stack.payment_processors).lower()
+        all_techs += " " + " ".join(tech_stack.analytics).lower()
+        all_techs += " " + " ".join(tech_stack.email_marketing).lower()
+        
+        for requirement in requirements:
+            if requirement.lower() in all_techs:
+                score += 25  # Bonus por tener lo requerido
+                reasons.append(f"✅ Tiene {requirement} (requerido)")
+        
+        return score, reasons
     
     def _score_business_type_match(
         self,

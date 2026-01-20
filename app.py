@@ -123,6 +123,10 @@ if search_button and prompt:
         analyzer = PromptAnalyzer()
         intent = analyzer.analyze(prompt)
         
+        # Mostrar prompt limpio si es diferente
+        if intent.cleaned_prompt != intent.original_prompt.lower():
+            st.info(f"🧹 **Prompt limpio:** {intent.cleaned_prompt}")
+        
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
@@ -133,6 +137,16 @@ if search_button and prompt:
             st.metric("Producto/Servicio", intent.product_service or "No detectado")
         with col4:
             st.metric("Confianza", f"{intent.confidence}%")
+        
+        # Mostrar exclusiones y requisitos si existen
+        if intent.exclusions or intent.requirements:
+            col1, col2 = st.columns(2)
+            with col1:
+                if intent.exclusions:
+                    st.warning(f"❌ **Excluir:** {', '.join(intent.exclusions)}")
+            with col2:
+                if intent.requirements:
+                    st.success(f"✅ **Requiere:** {', '.join(intent.requirements)}")
     
     # Buscar dominios
     with st.spinner("🔍 Buscando dominios..."):

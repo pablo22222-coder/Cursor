@@ -6,8 +6,110 @@ Este módulo es CRÍTICO para resolver el problema principal:
 - Extraer especificaciones del prompt (tipo de producto, nicho, etc.)
 """
 import re
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 from ..models.domain import PromptIntent, BusinessType
+
+
+class PromptCleaner:
+    """
+    Limpia el prompt de palabras innecesarias y normaliza expresiones.
+    
+    Ejemplo:
+    - "busco mas o menos ecommerce de ropa que no usen mailchimp"
+    - Se convierte en: "ecommerce de ropa sin mailchimp"
+    """
+    
+    # Palabras de relleno a eliminar
+    FILLER_WORDS = [
+        # Verbos de búsqueda
+        "busco", "buscar", "buscando", "necesito", "necesitar", "quiero", "queremos",
+        "encuentra", "encontrar", "dame", "dime", "muestra", "mostrar", "listar",
+        # Expresiones de aproximación
+        "mas o menos", "más o menos", "aproximadamente", "como", "algo así como",
+        "tipo", "estilo", "parecido a", "similar a",
+        # Artículos y conectores
+        "el", "la", "los", "las", "un", "una", "unos", "unas",
+        "que", "sean", "son", "es", "sea", "siendo",
+        "me", "te", "nos", "les",
+        "por favor", "porfavor", "porfa",
+        # Expresiones de cortesía/relleno
+        "oye", "mira", "vale", "ok", "bueno", "pues",
+        "básicamente", "realmente", "simplemente", "solo",
+    ]
+    
+    # Expresiones a normalizar (original -> normalizado)
+    NORMALIZE_EXPRESSIONS = [
+        # Negaciones
+        (r'\bque no usen?\b', 'sin'),
+        (r'\bque no tengan?\b', 'sin'),
+        (r'\bque no utilicen?\b', 'sin'),
+        (r'\bsin usar\b', 'sin'),
+        (r'\bsin tener\b', 'sin'),
+        (r'\bno tengan?\b', 'sin'),
+        (r'\bno usen?\b', 'sin'),
+        (r'\bexcluyendo\b', 'sin'),
+        (r'\bexcepto\b', 'sin'),
+        # Afirmaciones
+        (r'\bque usen?\b', 'con'),
+        (r'\bque tengan?\b', 'con'),
+        (r'\bque utilicen?\b', 'con'),
+        (r'\busando\b', 'con'),
+        (r'\bcon uso de\b', 'con'),
+        # Ubicación
+        (r'\bque est[eé]n? en\b', 'en'),
+        (r'\bubicad[oa]s? en\b', 'en'),
+        (r'\bde la zona de\b', 'en'),
+        # Especificaciones
+        (r'\bque vendan?\b', 'de'),
+        (r'\bque ofrezcan?\b', 'de'),
+        (r'\bdedicad[oa]s? a\b', 'de'),
+    ]
+    
+    def clean(self, prompt: str) -> Tuple[str, Dict]:
+        """
+        Limpia el prompt de palabras innecesarias.
+        
+        Args:
+            prompt: El prompt original del usuario
+            
+        Returns:
+            Tuple de (prompt limpio, metadata extraída)
+        """
+        original = prompt
+        cleaned = prompt.lower().strip()
+        metadata = {
+            "original": original,
+            "exclusions": [],  # Cosas que NO quiere (sin X)
+            "requirements": [],  # Cosas que SÍ quiere (con X)
+        }
+        
+        # 1. Normalizar expresiones complejas
+        for pattern, replacement in self.NORMALIZE_EXPRESSIONS:
+            cleaned = re.sub(pattern, replacement, cleaned, flags=re.IGNORECASE)
+        
+        # 2. Extraer exclusiones (sin X)
+        exclusion_pattern = r'\bsin\s+([a-záéíóúñ]+)'
+        exclusions = re.findall(exclusion_pattern, cleaned)
+        metadata["exclusions"] = exclusions
+        
+        # 3. Extraer requisitos (con X)
+        requirement_pattern = r'\bcon\s+([a-záéíóúñ]+)'
+        requirements = re.findall(requirement_pattern, cleaned)
+        metadata["requirements"] = requirements
+        
+        # 4. Eliminar palabras de relleno
+        for filler in self.FILLER_WORDS:
+            # Usar regex para eliminar palabra completa
+            pattern = r'\b' + re.escape(filler) + r'\b'
+            cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
+        
+        # 5. Limpiar espacios múltiples
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        
+        # 6. Limpiar puntuación innecesaria al inicio/final
+        cleaned = re.sub(r'^[,.\s]+|[,.\s]+$', '', cleaned)
+        
+        return cleaned, metadata
 
 
 class PromptAnalyzer:
@@ -115,7 +217,7 @@ class PromptAnalyzer:
     
     def __init__(self):
         """Inicializa el analizador de prompts."""
-        pass
+        self.cleaner = PromptCleaner()
     
     def analyze(self, prompt: str) -> PromptIntent:
         """
@@ -127,7 +229,11 @@ class PromptAnalyzer:
         Returns:
             PromptIntent con toda la información extraída
         """
-        prompt_lower = prompt.lower().strip()
+        # Limpiar el prompt de palabras innecesarias
+        cleaned_prompt, metadata = self.cleaner.clean(prompt)
+        
+        # Usar el prompt limpio para el análisis
+        prompt_lower = cleaned_prompt.lower().strip()
         
         # Detectar tipo de negocio
         business_type, business_confidence = self._detect_business_type(prompt_lower)
@@ -156,6 +262,9 @@ class PromptAnalyzer:
             characteristics=characteristics,
             metrics_to_analyze=metrics,
             original_prompt=prompt,
+            cleaned_prompt=cleaned_prompt,
+            exclusions=metadata.get("exclusions", []),
+            requirements=metadata.get("requirements", []),
             search_queries=search_queries,
             confidence=business_confidence
         )
