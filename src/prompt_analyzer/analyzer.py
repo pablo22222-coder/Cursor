@@ -24,7 +24,8 @@ class PromptAnalyzer:
         BusinessType.ECOMMERCE: [
             r'\becommerce\b', r'\be-commerce\b', r'\btienda\s+online\b',
             r'\btienda\s+virtual\b', r'\bshop\b', r'\bstore\b',
-            r'\bcomercio\s+electr[oó]nico\b'
+            r'\bcomercio\s+electr[oó]nico\b',
+            r'\btienda\s+de\b', r'\btienda\b'  # "tienda de ropa", "tienda"
         ],
         BusinessType.SAAS: [
             r'\bsaas\b', r'\bsoftware\s+as\s+a\s+service\b',

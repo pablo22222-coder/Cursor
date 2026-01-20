@@ -47,7 +47,21 @@ class DomainValidator:
         match_score = 0
         match_reasons = []
         
-        # 1. Analizar tecnologías
+        # 0. Puntuación base por aparecer en búsqueda relevante
+        # Si Google lo devolvió para esta query, tiene relevancia
+        base_score = 15
+        match_score += base_score
+        match_reasons.append(f"Encontrado en búsqueda (posición {domain.search_position})")
+        
+        # Bonus por buena posición en resultados
+        if domain.search_position <= 3:
+            match_score += 10
+            match_reasons.append("Top 3 en resultados de Google")
+        elif domain.search_position <= 5:
+            match_score += 5
+            match_reasons.append("Top 5 en resultados de Google")
+        
+        # 1. Analizar tecnologías (no bloquea si falla)
         tech_stack = self.tech_analyzer.analyze(domain.url)
         if tech_stack:
             analysis.tech_stack = tech_stack
@@ -65,6 +79,10 @@ class DomainValidator:
             )
             match_score += type_score
             match_reasons.extend(type_reasons)
+        else:
+            # Si no podemos analizar tecnologías, asumimos tipo según búsqueda
+            analysis.detected_business_type = intent.business_type
+            match_reasons.append("Tipo asumido por contexto de búsqueda")
         
         # 2. Analizar contenido/título/descripción
         content_score, content_reasons = self._score_content_match(domain, intent)
@@ -87,7 +105,7 @@ class DomainValidator:
         # Determinar si cumple el prompt
         analysis.match_score = min(match_score, 100)
         analysis.match_reasons = match_reasons
-        analysis.matches_prompt = match_score >= 50
+        analysis.matches_prompt = match_score >= 30
         
         domain.analysis = analysis
         return domain
@@ -149,42 +167,43 @@ class DomainValidator:
         reasons = []
         
         # Combinar título y descripción para análisis
-        content = f"{domain.title or ''} {domain.description or ''}".lower()
+        content = f"{domain.title or ''} {domain.description or ''} {domain.domain or ''}".lower()
         
         # Verificar nicho en contenido
         if intent.niche:
             niche_lower = intent.niche.lower()
             if niche_lower in content:
-                score += 15
-                reasons.append(f"Nicho '{intent.niche}' encontrado en contenido")
+                score += 20
+                reasons.append(f"Nicho '{intent.niche}' encontrado")
         
         # Verificar producto/servicio
         if intent.product_service:
             product_lower = intent.product_service.lower()
             if product_lower in content:
-                score += 15
-                reasons.append(f"Producto/servicio '{intent.product_service}' en contenido")
+                score += 20
+                reasons.append(f"Producto/servicio '{intent.product_service}' encontrado")
+        
+        # Verificar palabras del prompt original en contenido
+        prompt_words = intent.original_prompt.lower().split()
+        matching_words = [w for w in prompt_words if len(w) > 3 and w in content]
+        if matching_words:
+            score += min(len(matching_words) * 5, 15)
+            reasons.append(f"Palabras del prompt encontradas: {', '.join(matching_words[:3])}")
         
         # Verificar indicadores de tipo de negocio en contenido
         if intent.business_type == BusinessType.ECOMMERCE:
-            ecommerce_words = ["comprar", "tienda", "carrito", "envío", "productos", "shop", "store", "precio", "añadir"]
-            found_count = 0
-            for word in ecommerce_words:
-                if word in content:
-                    found_count += 1
-            if found_count > 0:
-                score += min(found_count * 5, 15)
-                reasons.append(f"Indicadores de ecommerce encontrados ({found_count})")
+            ecommerce_words = ["comprar", "tienda", "carrito", "envío", "productos", "shop", "store", "precio", "añadir", "oferta", "descuento", "moda", "ropa", "compra"]
+            found_words = [w for w in ecommerce_words if w in content]
+            if found_words:
+                score += min(len(found_words) * 5, 20)
+                reasons.append(f"Indicadores de ecommerce: {', '.join(found_words[:3])}")
         
         elif intent.business_type == BusinessType.AGENCY:
-            agency_words = ["servicios", "portfolio", "proyectos", "agencia", "equipo", "clientes", "contacto", "presupuesto"]
-            found_count = 0
-            for word in agency_words:
-                if word in content:
-                    found_count += 1
-            if found_count > 0:
-                score += min(found_count * 5, 15)
-                reasons.append(f"Indicadores de agencia encontrados ({found_count})")
+            agency_words = ["servicios", "portfolio", "proyectos", "agencia", "equipo", "clientes", "contacto", "presupuesto", "marketing", "digital", "estrategia"]
+            found_words = [w for w in agency_words if w in content]
+            if found_words:
+                score += min(len(found_words) * 5, 20)
+                reasons.append(f"Indicadores de agencia: {', '.join(found_words[:3])}")
         
         elif intent.business_type == BusinessType.SAAS:
             saas_words = ["pricing", "plans", "demo", "trial", "features", "software"]
