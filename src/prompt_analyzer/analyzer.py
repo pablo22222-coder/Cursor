@@ -10,6 +10,242 @@ from typing import List, Tuple, Optional, Dict
 from ..models.domain import PromptIntent, BusinessType
 
 
+class PromptNormalizer:
+    """
+    Normaliza ortografía y semántica del prompt.
+    
+    FILOSOFÍA: Asumir errores humanos como norma, no como excepción.
+    No corregimos el texto visible, corregimos la interpretación interna.
+    """
+    
+    # Errores ortográficos comunes → corrección interna
+    SPELLING_CORRECTIONS = {
+        # Ecommerce y variantes
+        "ecomerce": "ecommerce",
+        "e-comerce": "ecommerce",
+        "ecommerse": "ecommerce",
+        "eccomerce": "ecommerce",
+        "e-commerce": "ecommerce",
+        "e commerce": "ecommerce",
+        "icommerce": "ecommerce",
+        "cormercio electronico": "ecommerce",
+        "comercio electronico": "ecommerce",
+        
+        # Tienda y variantes
+        "tinda": "tienda",
+        "tiena": "tienda",
+        "teinda": "tienda",
+        "tienfa": "tienda",
+        
+        # Marketing y variantes
+        "marqueting": "marketing",
+        "marketin": "marketing",
+        "markting": "marketing",
+        "maketing": "marketing",
+        "mkt": "marketing",
+        
+        # Digital y variantes
+        "dijital": "digital",
+        "digtal": "digital",
+        "digitl": "digital",
+        
+        # Agencia y variantes
+        "agncia": "agencia",
+        "agenca": "agencia",
+        "ajencia": "agencia",
+        
+        # Electrónica y variantes
+        "eletronica": "electronica",
+        "electronica": "electronica",
+        "elctronica": "electronica",
+        "electronca": "electronica",
+        
+        # Ropa y moda
+        "rropa": "ropa",
+        "rpoa": "ropa",
+        "fasion": "moda",
+        "fachion": "moda",
+        "fashion": "moda",
+        
+        # Software/SaaS
+        "sofware": "software",
+        "sotfware": "software",
+        "softwre": "software",
+        "sas": "saas",
+        "sass": "saas",
+        
+        # Dropshipping
+        "dropshiping": "dropshipping",
+        "drop shipping": "dropshipping",
+        "drop shiping": "dropshipping",
+        "dropsipping": "dropshipping",
+        
+        # Tecnologías comunes
+        "shopfy": "shopify",
+        "shoppify": "shopify",
+        "sopify": "shopify",
+        "woocomerce": "woocommerce",
+        "woo commerce": "woocommerce",
+        "wodpress": "wordpress",
+        "wordpres": "wordpress",
+        "word press": "wordpress",
+        "mailchim": "mailchimp",
+        "mailchip": "mailchimp",
+        "mail chimp": "mailchimp",
+        "stripe": "stripe",
+        "paypa": "paypal",
+        "pay pal": "paypal",
+        
+        # Países/ubicaciones
+        "espana": "españa",
+        "espania": "españa",
+        "mejico": "mexico",
+        "mexco": "mexico",
+        
+        # Otros términos comunes
+        "joyeria": "joyeria",
+        "jolleria": "joyeria",
+        "bellesa": "belleza",
+        "beleza": "belleza",
+        "cosmetica": "cosmetica",
+        "cosmetca": "cosmetica",
+        "tecnolojia": "tecnologia",
+        "tecnologua": "tecnologia",
+    }
+    
+    # Sinónimos semánticos → término normalizado interno
+    SEMANTIC_SYNONYMS = {
+        # Tienda online
+        "shop": "tienda",
+        "store": "tienda",
+        "boutique": "tienda",
+        "almacen": "tienda",
+        "comercio": "tienda",
+        
+        # Ecommerce
+        "tienda online": "ecommerce",
+        "tienda virtual": "ecommerce",
+        "tienda en linea": "ecommerce",
+        "tienda en línea": "ecommerce",
+        "negocio online": "ecommerce",
+        "venta online": "ecommerce",
+        
+        # Ropa/Moda
+        "ropa": "moda",
+        "textil": "moda",
+        "prendas": "moda",
+        "vestimenta": "moda",
+        "indumentaria": "moda",
+        "clothing": "moda",
+        "apparel": "moda",
+        
+        # Tecnología/Electrónica  
+        "electronica": "tecnologia",
+        "electrónica": "tecnologia",
+        "gadgets": "tecnologia",
+        "tech": "tecnologia",
+        "informatica": "tecnologia",
+        "informática": "tecnologia",
+        "ordenadores": "tecnologia",
+        "computadoras": "tecnologia",
+        "computadores": "tecnologia",
+        
+        # Belleza
+        "cosmetica": "belleza",
+        "cosmética": "belleza",
+        "skincare": "belleza",
+        "cuidado de la piel": "belleza",
+        "maquillaje": "belleza",
+        "makeup": "belleza",
+        "beauty": "belleza",
+        
+        # Marketing
+        "publicidad": "marketing",
+        "advertising": "marketing",
+        "ads": "marketing",
+        "promocion": "marketing",
+        
+        # Agencia
+        "estudio": "agencia",
+        "consultora": "agencia",
+        "consultoria": "agencia",
+        "empresa de servicios": "agencia",
+        "agency": "agencia",
+    }
+    
+    # Caracteres con/sin tilde para normalización
+    ACCENT_MAP = {
+        'á': 'a', 'é': 'e', 'í': 'i', 'ó': 'o', 'ú': 'u',
+        'ä': 'a', 'ë': 'e', 'ï': 'i', 'ö': 'o', 'ü': 'u',
+        'à': 'a', 'è': 'e', 'ì': 'i', 'ò': 'o', 'ù': 'u',
+        'ñ': 'n',
+    }
+    
+    def normalize(self, text: str) -> str:
+        """
+        Normaliza el texto para interpretación interna.
+        
+        Args:
+            text: Texto original
+            
+        Returns:
+            Texto normalizado para procesamiento interno
+        """
+        normalized = text.lower().strip()
+        
+        # 1. Corregir errores ortográficos conocidos
+        for wrong, correct in self.SPELLING_CORRECTIONS.items():
+            # Buscar palabra completa
+            pattern = r'\b' + re.escape(wrong) + r'\b'
+            normalized = re.sub(pattern, correct, normalized, flags=re.IGNORECASE)
+        
+        # 2. NO aplicamos sinónimos aquí - eso lo hacemos en el análisis
+        # para mantener el texto legible pero interpretar correctamente
+        
+        return normalized
+    
+    def normalize_for_matching(self, text: str) -> str:
+        """
+        Normaliza texto eliminando acentos para comparaciones.
+        
+        Args:
+            text: Texto a normalizar
+            
+        Returns:
+            Texto sin acentos
+        """
+        result = text.lower()
+        for accented, plain in self.ACCENT_MAP.items():
+            result = result.replace(accented, plain)
+        return result
+    
+    def get_semantic_variations(self, term: str) -> List[str]:
+        """
+        Obtiene variaciones semánticas de un término.
+        
+        Args:
+            term: Término a expandir
+            
+        Returns:
+            Lista de términos equivalentes
+        """
+        variations = [term]
+        term_lower = term.lower()
+        
+        # Buscar sinónimos directos
+        for synonym, canonical in self.SEMANTIC_SYNONYMS.items():
+            if term_lower == canonical:
+                variations.append(synonym)
+            elif term_lower == synonym:
+                variations.append(canonical)
+                # También añadir otros sinónimos del mismo grupo
+                for syn, can in self.SEMANTIC_SYNONYMS.items():
+                    if can == canonical and syn not in variations:
+                        variations.append(syn)
+        
+        return list(set(variations))
+
+
 class PromptCleaner:
     """
     Limpia el prompt de palabras innecesarias y normaliza expresiones.
@@ -18,6 +254,9 @@ class PromptCleaner:
     - "busco mas o menos ecommerce de ropa que no usen mailchimp"
     - Se convierte en: "ecommerce de ropa sin mailchimp"
     """
+    
+    def __init__(self):
+        self.normalizer = PromptNormalizer()
     
     # Palabras de relleno a eliminar
     FILLER_WORDS = [
@@ -82,6 +321,9 @@ class PromptCleaner:
             "exclusions": [],  # Cosas que NO quiere (sin X)
             "requirements": [],  # Cosas que SÍ quiere (con X)
         }
+        
+        # 0. Normalizar ortografía (corregir errores comunes)
+        cleaned = self.normalizer.normalize(cleaned)
         
         # 1. Normalizar expresiones complejas
         for pattern, replacement in self.NORMALIZE_EXPRESSIONS:
@@ -218,21 +460,25 @@ class PromptAnalyzer:
     def __init__(self):
         """Inicializa el analizador de prompts."""
         self.cleaner = PromptCleaner()
+        self.normalizer = PromptNormalizer()
     
     def analyze(self, prompt: str) -> PromptIntent:
         """
         Analiza el prompt y extrae la intención del usuario.
         
+        FILOSOFÍA: Asumir errores humanos como norma.
+        "ecomerce de rropa" → se interpreta como "ecommerce de ropa"
+        
         Args:
-            prompt: El prompt del usuario (ej: "ecommerce de crema facial")
+            prompt: El prompt del usuario (puede tener errores)
             
         Returns:
             PromptIntent con toda la información extraída
         """
-        # Limpiar el prompt de palabras innecesarias
+        # Limpiar el prompt de palabras innecesarias Y normalizar ortografía
         cleaned_prompt, metadata = self.cleaner.clean(prompt)
         
-        # Usar el prompt limpio para el análisis
+        # Usar el prompt limpio y normalizado para el análisis
         prompt_lower = cleaned_prompt.lower().strip()
         
         # Detectar tipo de negocio
