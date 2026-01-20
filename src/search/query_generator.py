@@ -3,6 +3,9 @@ Generador de queries de búsqueda inteligentes.
 
 Este módulo genera queries que encuentren webs que SEAN lo que busca
 el usuario, no webs que hablen de eso.
+
+ESTRATEGIA CLAVE: Usar términos TRANSACCIONALES que aparecen en webs reales,
+no términos informativos que aparecerían en artículos.
 """
 from typing import List, Optional
 from ..models.domain import PromptIntent, BusinessType
@@ -16,28 +19,12 @@ class QueryGenerator:
     no términos que aparecerían en artículos que hablan del tema.
     """
     
-    # Términos que indican que una web ES un ecommerce (no que habla de ecommerce)
-    ECOMMERCE_INDICATORS = [
-        "comprar", "añadir al carrito", "envío gratis", "tienda",
-        "productos", "ofertas", "descuentos", "checkout"
-    ]
-    
-    # Términos que indican que una web ES un SaaS
-    SAAS_INDICATORS = [
-        "pricing", "plans", "free trial", "sign up", "demo",
-        "features", "integrations", "api"
-    ]
-    
-    # Términos que indican que una web ES una agencia
-    AGENCY_INDICATORS = [
-        "servicios", "portfolio", "proyectos", "clientes",
-        "equipo", "contacto", "presupuesto"
-    ]
-    
-    # Exclusiones: términos que indican que es un artículo/definición
-    EXCLUSION_TERMS = [
-        "-\"qué es\"", "-\"definición\"", "-\"guía\"", "-\"tutorial\"",
-        "-\"cómo crear\"", "-wikipedia", "-\"significado\""
+    # Plataformas de ecommerce conocidas para búsqueda directa
+    ECOMMERCE_PLATFORMS_DOMAINS = [
+        "myshopify.com",
+        "tiendanube.com", 
+        "wixsite.com",
+        "squarespace.com"
     ]
     
     def __init__(self):
@@ -66,71 +53,91 @@ class QueryGenerator:
         else:
             queries.extend(self._generate_generic_queries(intent))
         
-        # Añadir exclusiones para evitar artículos
-        queries = self._add_exclusions(queries)
+        # Eliminar duplicados manteniendo orden
+        seen = set()
+        unique = []
+        for q in queries:
+            q_lower = q.lower()
+            if q_lower not in seen:
+                seen.add(q_lower)
+                unique.append(q)
         
-        # Eliminar duplicados
-        return list(dict.fromkeys(queries))[:5]
+        return unique[:8]  # Más queries para mejores resultados
     
     def _generate_ecommerce_queries(self, intent: PromptIntent) -> List[str]:
-        """Genera queries para encontrar tiendas online reales."""
+        """
+        Genera queries para encontrar tiendas online REALES.
+        
+        Estrategia: Usar términos que un COMPRADOR usaría, no un investigador.
+        """
         queries = []
         
         niche = intent.niche or ""
         product = intent.product_service or ""
         
-        if product:
-            # Queries muy específicas para el producto
-            queries.append(f"comprar {product} online")
-            queries.append(f"tienda {product}")
-            queries.append(f"{product} precio envío")
-            queries.append(f"shop {product}")
+        # Término principal (producto o nicho)
+        main_term = product or niche or "productos"
         
-        if niche:
-            queries.append(f"tienda online {niche}")
-            queries.append(f"comprar {niche} españa")
-            queries.append(f"mejores tiendas {niche} online")
+        # 1. QUERIES TRANSACCIONALES (como buscaría un comprador)
+        queries.append(f"comprar {main_term} online")
+        queries.append(f"{main_term} tienda online")
+        queries.append(f"tienda {main_term} envío españa")
         
-        if not product and not niche:
-            # Queries genéricas pero que encuentran tiendas reales
-            queries.append("tienda online ropa comprar")
-            queries.append("tienda online electrónica españa")
+        # 2. QUERIES CON SEÑALES DE TIENDA REAL
+        queries.append(f"{main_term} añadir carrito")
+        queries.append(f"{main_term} precio oferta")
+        
+        # 3. QUERIES DE DESCUBRIMIENTO
+        queries.append(f"mejores tiendas {main_term} online")
+        queries.append(f"donde comprar {main_term}")
+        
+        # 4. QUERIES EN PLATAFORMAS ESPECÍFICAS (garantiza tiendas reales)
+        if niche or product:
+            queries.append(f"site:myshopify.com {main_term}")
         
         return queries
     
     def _generate_saas_queries(self, intent: PromptIntent) -> List[str]:
-        """Genera queries para encontrar productos SaaS reales."""
+        """
+        Genera queries para encontrar productos SaaS REALES.
+        
+        Estrategia: Buscar páginas de pricing, signup, features.
+        """
         queries = []
         
         niche = intent.niche or ""
         product = intent.product_service or ""
+        main_term = product or niche or "software"
         
-        if niche or product:
-            term = product or niche
-            queries.append(f"software {term} pricing")
-            queries.append(f"{term} tool online free trial")
-            queries.append(f"best {term} software")
-            queries.append(f"herramienta {term} online")
-        else:
-            queries.append("software online pricing plans")
-            queries.append("saas tool free trial")
+        # Queries que encuentran SaaS reales (tienen pricing, trial, etc)
+        queries.append(f"{main_term} software pricing")
+        queries.append(f"{main_term} herramienta online gratis")
+        queries.append(f"mejor {main_term} software 2024")
+        queries.append(f"{main_term} app free trial")
+        queries.append(f"{main_term} plataforma registrarse")
+        queries.append(f"alternativas {main_term} software")
         
         return queries
     
     def _generate_agency_queries(self, intent: PromptIntent) -> List[str]:
-        """Genera queries para encontrar agencias reales."""
+        """
+        Genera queries para encontrar agencias REALES.
+        
+        Estrategia: Buscar páginas de servicios, portfolio, contacto.
+        """
         queries = []
         
         niche = intent.niche or ""
+        product = intent.product_service or niche
         
-        if niche:
-            queries.append(f"agencia {niche} servicios")
-            queries.append(f"agencia de {niche} portfolio")
-            queries.append(f"empresa {niche} proyectos")
-            queries.append(f"mejores agencias {niche} españa")
-        else:
-            queries.append("agencia marketing digital servicios")
-            queries.append("agencia diseño web portfolio")
+        # Queries que encuentran agencias reales
+        queries.append(f"agencia {product} españa")
+        queries.append(f"agencia {product} servicios precios")
+        queries.append(f"mejores agencias {product} españa")
+        queries.append(f"empresa {product} portfolio clientes")
+        queries.append(f"contratar agencia {product}")
+        queries.append(f"agencia {product} presupuesto")
+        queries.append(f"top agencias {product} madrid barcelona")
         
         return queries
     
@@ -140,55 +147,47 @@ class QueryGenerator:
         
         niche = intent.niche or ""
         product = intent.product_service or ""
+        main_term = product or niche or "productos"
         
-        # Las tiendas dropshipping suelen parecer tiendas normales
-        # pero con ciertos indicadores
-        if product or niche:
-            term = product or niche
-            queries.append(f"comprar {term} envío gratis")
-            queries.append(f"tienda {term} productos")
-            queries.append(f"{term} online store")
-        else:
-            queries.append("tienda online productos variados")
-            queries.append("shop productos importados")
+        # Dropshipping suele ser tiendas con envío desde China/internacional
+        queries.append(f"comprar {main_term} envío gratis")
+        queries.append(f"tienda {main_term} ofertas")
+        queries.append(f"{main_term} barato online")
+        queries.append(f"site:myshopify.com {main_term}")
         
         return queries
     
     def _generate_generic_queries(self, intent: PromptIntent) -> List[str]:
-        """Genera queries genéricas cuando no se detecta tipo específico."""
+        """
+        Genera queries cuando no se detecta tipo específico.
+        
+        Intenta inferir la intención y buscar webs reales.
+        """
         queries = []
+        prompt = intent.original_prompt.strip()
+        niche = intent.niche or ""
+        product = intent.product_service or ""
         
-        # Usar el prompt original con modificaciones
-        prompt = intent.original_prompt
+        # Si tiene nicho, probablemente busca tiendas o servicios
+        if niche or product:
+            term = product or niche
+            queries.append(f"comprar {term} online")
+            queries.append(f"{term} tienda")
+            queries.append(f"{term} empresa servicios")
+            queries.append(f"mejores {term} españa")
         
-        # Intentar inferir qué busca basándose en palabras clave
-        queries.append(prompt)
+        # Queries basadas en el prompt original
+        queries.append(f"{prompt} online")
         queries.append(f"mejores {prompt}")
-        queries.append(f"{prompt} empresas")
+        queries.append(f"{prompt} españa")
         
         return queries
-    
-    def _add_exclusions(self, queries: List[str]) -> List[str]:
-        """Añade términos de exclusión para evitar artículos/definiciones."""
-        # Limitamos las exclusiones para no hacer la query demasiado larga
-        exclusions = " ".join(self.EXCLUSION_TERMS[:3])
-        
-        return [f"{q} {exclusions}" for q in queries]
     
     def generate_verification_queries(self, domain: str, intent: PromptIntent) -> List[str]:
         """
         Genera queries para verificar si un dominio específico cumple el prompt.
-        
-        Args:
-            domain: El dominio a verificar
-            intent: La intención del usuario
-            
-        Returns:
-            Queries para verificar el dominio
         """
         queries = []
-        
-        # Buscar información específica del dominio
         queries.append(f"site:{domain}")
         
         if intent.niche:

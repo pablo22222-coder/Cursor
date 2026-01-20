@@ -256,81 +256,68 @@ class PromptAnalyzer:
         """
         Genera queries de búsqueda inteligentes.
         
-        CLAVE: Estas queries deben encontrar webs que SEAN el tipo de negocio,
-        no webs que hablen de él.
+        CLAVE: Usar términos TRANSACCIONALES que un comprador/cliente usaría,
+        no términos informativos que usaría alguien investigando.
         """
         queries = []
         
-        # Mapeo de tipos de negocio a términos de búsqueda efectivos
-        business_search_terms = {
-            BusinessType.ECOMMERCE: [
-                "tienda online", "comprar", "shop", "store",
-                "carrito de compra", "envío", "productos"
-            ],
-            BusinessType.SAAS: [
-                "software", "plataforma", "herramienta", "app",
-                "pricing", "planes", "free trial", "demo"
-            ],
-            BusinessType.AGENCY: [
-                "agencia", "servicios", "portfolio", "clientes",
-                "proyectos", "contacto"
-            ],
-            BusinessType.DROPSHIPPING: [
-                "tienda online", "comprar", "envío directo",
-                "productos importados"
-            ],
-            BusinessType.MARKETPLACE: [
-                "marketplace", "vendedores", "compradores",
-                "plataforma de ventas"
-            ],
-        }
+        # Término principal para las búsquedas
+        main_term = product_service or niche or ""
         
-        # Query base según tipo de negocio
-        if business_type != BusinessType.UNKNOWN:
-            terms = business_search_terms.get(business_type, [])
-            
-            # Construir queries combinando nicho y tipo
-            if niche:
-                # Query principal: nicho + indicador de que es ese tipo de web
-                if business_type == BusinessType.ECOMMERCE:
-                    queries.append(f"tienda online {niche}")
-                    queries.append(f"comprar {niche} online")
-                    queries.append(f"shop {niche}")
-                    if product_service:
-                        queries.append(f"comprar {product_service} online")
-                        queries.append(f"tienda {product_service}")
-                elif business_type == BusinessType.AGENCY:
-                    queries.append(f"agencia de {niche}")
-                    queries.append(f"agencia {niche} servicios")
-                elif business_type == BusinessType.SAAS:
-                    queries.append(f"software {niche}")
-                    queries.append(f"herramienta {niche} online")
-                    queries.append(f"plataforma {niche}")
+        if business_type == BusinessType.ECOMMERCE:
+            if main_term:
+                # Queries transaccionales (como buscaría un comprador)
+                queries.append(f"comprar {main_term} online")
+                queries.append(f"tienda {main_term}")
+                queries.append(f"{main_term} precio envío")
+                queries.append(f"donde comprar {main_term}")
+                queries.append(f"mejores tiendas {main_term}")
             else:
-                # Sin nicho, usar términos genéricos pero que encuentren webs reales
-                if business_type == BusinessType.ECOMMERCE:
-                    queries.append("tienda online comprar")
-                    queries.append("shop online productos")
-                elif business_type == BusinessType.AGENCY:
-                    queries.append("agencia servicios portfolio")
-                elif business_type == BusinessType.SAAS:
-                    queries.append("software online pricing plans")
+                queries.append("tienda online comprar")
+                queries.append("shop online productos")
+                
+        elif business_type == BusinessType.AGENCY:
+            if main_term:
+                queries.append(f"agencia {main_term} servicios")
+                queries.append(f"contratar agencia {main_term}")
+                queries.append(f"mejores agencias {main_term}")
+                queries.append(f"empresa {main_term} portfolio")
+            else:
+                queries.append("agencia marketing servicios")
+                queries.append("agencia diseño portfolio")
+                
+        elif business_type == BusinessType.SAAS:
+            if main_term:
+                queries.append(f"software {main_term} precio")
+                queries.append(f"{main_term} herramienta online")
+                queries.append(f"mejor {main_term} software")
+            else:
+                queries.append("software online pricing")
+                
+        elif business_type == BusinessType.DROPSHIPPING:
+            if main_term:
+                queries.append(f"comprar {main_term} barato")
+                queries.append(f"tienda {main_term} ofertas")
+            
+        else:
+            # Tipo desconocido - intentar queries genéricas útiles
+            if main_term:
+                queries.append(f"comprar {main_term} online")
+                queries.append(f"{main_term} tienda")
+                queries.append(f"mejores {main_term}")
+            queries.append(original_prompt)
         
-        # Si tenemos producto/servicio específico, crear queries más específicas
-        if product_service:
-            queries.append(f"comprar {product_service}")
-            queries.append(f"{product_service} tienda online")
-        
-        # Añadir características locales si aplica
+        # Añadir variante con España si aplica
         if 'español' in characteristics or 'local' in characteristics:
-            queries = [f"{q} españa" for q in queries[:3]] + queries
+            if queries:
+                queries.insert(1, f"{queries[0]} españa")
         
-        # Eliminar duplicados manteniendo orden
+        # Eliminar duplicados
         seen = set()
-        unique_queries = []
+        unique = []
         for q in queries:
             if q.lower() not in seen:
                 seen.add(q.lower())
-                unique_queries.append(q)
+                unique.append(q)
         
-        return unique_queries[:5]  # Máximo 5 queries diferentes
+        return unique[:6]
