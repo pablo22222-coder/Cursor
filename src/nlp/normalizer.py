@@ -4,6 +4,7 @@ Normalizador avanzado de texto.
 FILOSOFÍA: Normalización LIGERA, no agresiva.
 - Lowercase, NFKC normalize, collapse spaces
 - Solo elimina stop-phrases conversacionales
+- Corrige errores ortográficos COMUNES de forma segura
 - NO sustituye nombres propios/marcas automáticamente
 """
 import re
@@ -12,6 +13,71 @@ from typing import Tuple, Dict, List, Optional
 
 
 class AdvancedNormalizer:
+    
+    # Correcciones ortográficas MUY seguras (errores comunes evidentes)
+    SAFE_SPELLING_CORRECTIONS = {
+        # Ecommerce y variantes (muy común)
+        "ecomerce": "ecommerce",
+        "ecomerse": "ecommerce",
+        "e-comerce": "ecommerce",
+        "ecommerse": "ecommerce",
+        "eccomerce": "ecommerce",
+        "e-commerce": "ecommerce",
+        "e commerce": "ecommerce",
+        "icommerce": "ecommerce",
+        "comercio electronico": "ecommerce",
+        
+        # Tienda y variantes
+        "tinda": "tienda",
+        "tiena": "tienda",
+        "teinda": "tienda",
+        "tienfa": "tienda",
+        
+        # Ropa (muy común)
+        "rropa": "ropa",
+        "rpoa": "ropa",
+        "roap": "ropa",
+        
+        # Marketing
+        "marqueting": "marketing",
+        "marketin": "marketing",
+        "markting": "marketing",
+        "maketing": "marketing",
+        
+        # Digital
+        "dijital": "digital",
+        "digtal": "digital",
+        "digitl": "digital",
+        
+        # Agencia
+        "agncia": "agencia",
+        "agenca": "agencia",
+        "ajencia": "agencia",
+        
+        # Electrónica
+        "eletronica": "electronica",
+        "elctronica": "electronica",
+        "electronca": "electronica",
+        
+        # Moda/Fashion
+        "fasion": "moda",
+        "fachion": "moda",
+        "fashion": "moda",
+        
+        # Software
+        "sofware": "software",
+        "sotfware": "software",
+        "softwre": "software",
+        
+        # SaaS
+        "sas": "saas",
+        "sass": "saas",
+        
+        # Dropshipping
+        "dropshiping": "dropshipping",
+        "drop shipping": "dropshipping",
+        "dropsipping": "dropshipping",
+    }
     """
     Normalización ligera de texto para procesamiento NLP.
     
@@ -51,7 +117,7 @@ class AdvancedNormalizer:
     
     def normalize(self, text: str) -> Tuple[str, Dict]:
         """
-        Normaliza texto de forma ligera.
+        Normaliza texto de forma ligera pero corrigiendo errores evidentes.
         
         Args:
             text: Texto original
@@ -63,6 +129,7 @@ class AdvancedNormalizer:
             "original": text,
             "extracted_entities": {},
             "removed_stops": [],
+            "spelling_corrections": [],
         }
         
         # 1. NFKC normalization (normaliza caracteres unicode)
@@ -77,20 +144,26 @@ class AdvancedNormalizer:
             if matches:
                 metadata["extracted_entities"][entity_type] = matches
         
-        # 4. Eliminar SOLO stop-phrases conversacionales
+        # 4. Aplicar correcciones ortográficas SEGURAS
+        for wrong, correct in self.SAFE_SPELLING_CORRECTIONS.items():
+            if wrong in normalized:
+                normalized = normalized.replace(wrong, correct)
+                metadata["spelling_corrections"].append(f"{wrong} → {correct}")
+        
+        # 5. Eliminar SOLO stop-phrases conversacionales
         for pattern in self._stop_patterns:
             matches = pattern.findall(normalized)
             if matches:
                 metadata["removed_stops"].extend(matches)
             normalized = pattern.sub('', normalized)
         
-        # 5. Collapse multiple spaces
+        # 6. Collapse multiple spaces
         normalized = re.sub(r'\s+', ' ', normalized)
         
-        # 6. Strip
+        # 7. Strip
         normalized = normalized.strip()
         
-        # 7. Limpiar puntuación redundante al inicio/final
+        # 8. Limpiar puntuación redundante al inicio/final
         normalized = re.sub(r'^[,.\s:;]+|[,.\s:;]+$', '', normalized)
         
         return normalized, metadata
