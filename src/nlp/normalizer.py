@@ -4,12 +4,19 @@ Normalizador avanzado de texto.
 FILOSOFÍA: Normalización LIGERA, no agresiva.
 - Lowercase, NFKC normalize, collapse spaces
 - Solo elimina stop-phrases conversacionales
-- Corrige errores ortográficos COMUNES de forma segura
+- Corrige errores ortográficos usando fuzzy matching automático
 - NO sustituye nombres propios/marcas automáticamente
 """
 import re
 import unicodedata
 from typing import Tuple, Dict, List, Optional
+
+# Importar fuzzy corrector
+try:
+    from .fuzzy_corrector import get_fuzzy_corrector, FuzzyCorrector
+    FUZZY_AVAILABLE = True
+except ImportError:
+    FUZZY_AVAILABLE = False
 
 
 class AdvancedNormalizer:
@@ -137,10 +144,24 @@ class AdvancedNormalizer:
         "modifier": r'\b(sin|con|que tenga|que use|que no tenga|que no use|excluyendo|incluyendo)\b',
     }
     
-    def __init__(self):
+    def __init__(self, use_fuzzy: bool = True, fuzzy_threshold: float = 80.0):
+        """
+        Inicializa el normalizador.
+        
+        Args:
+            use_fuzzy: Si usar fuzzy matching para corrección automática
+            fuzzy_threshold: Similitud mínima (0-100) para aceptar corrección
+        """
         # Compilar patrones para eficiencia
         self._stop_patterns = [re.compile(p, re.IGNORECASE) for p in self.CONVERSATIONAL_STOPS]
         self._entity_patterns = {k: re.compile(v, re.IGNORECASE) for k, v in self.ENTITY_PATTERNS.items()}
+        
+        # Fuzzy corrector para corrección automática
+        self._use_fuzzy = use_fuzzy and FUZZY_AVAILABLE
+        self._fuzzy_corrector = None
+        
+        if self._use_fuzzy:
+            self._fuzzy_corrector = get_fuzzy_corrector(min_similarity=fuzzy_threshold)
     
     def normalize(self, text: str) -> Tuple[str, Dict]:
         """
@@ -171,11 +192,20 @@ class AdvancedNormalizer:
             if matches:
                 metadata["extracted_entities"][entity_type] = matches
         
-        # 4. Aplicar correcciones ortográficas SEGURAS
+        # 4. Aplicar correcciones ortográficas
+        # Primero: correcciones manuales SEGURAS (errores muy comunes)
         for wrong, correct in self.SAFE_SPELLING_CORRECTIONS.items():
             if wrong in normalized:
                 normalized = normalized.replace(wrong, correct)
                 metadata["spelling_corrections"].append(f"{wrong} → {correct}")
+        
+        # Segundo: fuzzy matching automático (detecta errores nuevos)
+        if self._use_fuzzy and self._fuzzy_corrector:
+            normalized, fuzzy_corrections = self._fuzzy_corrector.correct_text(normalized)
+            for corr in fuzzy_corrections:
+                metadata["spelling_corrections"].append(
+                    f"{corr['original']} → {corr['corrected']} ({corr['similarity']:.0f}%)"
+                )
         
         # 5. Eliminar SOLO stop-phrases conversacionales
         for pattern in self._stop_patterns:
