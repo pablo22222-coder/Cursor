@@ -72,11 +72,38 @@ class AdvancedNormalizer:
         # SaaS
         "sas": "saas",
         "sass": "saas",
+        "saass": "saas",
+        
+        # CRM (muy común confundir con CMR)
+        "cmr": "crm",
+        "crm": "crm",
+        "crmm": "crm",
+        
+        # ERP
+        "erp": "erp",
+        "erpp": "erp",
         
         # Dropshipping
         "dropshiping": "dropshipping",
         "drop shipping": "dropshipping",
         "dropsipping": "dropshipping",
+        
+        # Otros términos tech comunes
+        "analitycs": "analytics",
+        "analitics": "analytics",
+        "analyitcs": "analytics",
+        "seo": "seo",
+        "sem": "sem",
+        "gestion": "gestion",
+        "gestión": "gestion",
+        "proyectos": "proyectos",
+        "projectos": "proyectos",
+        "inventario": "inventario",
+        "imventario": "inventario",
+        "contabilidad": "contabilidad",
+        "contavilidad": "contabilidad",
+        "facturacion": "facturacion",
+        "facturación": "facturacion",
     }
     """
     Normalización ligera de texto para procesamiento NLP.

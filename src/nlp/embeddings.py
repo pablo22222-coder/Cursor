@@ -52,6 +52,14 @@ class EmbeddingEngine:
         "mascotas": ["perros", "gatos", "animales", "veterinaria", "pet shop"],
         "infantil": ["bebés", "niños", "juguetes", "maternidad", "kids"],
         "joyeria": ["joyas", "relojes", "accesorios", "bisutería", "luxury"],
+        # Software/SaaS nichos
+        "crm": ["gestión de clientes", "customer relationship", "ventas", "leads", "pipeline"],
+        "erp": ["gestión empresarial", "recursos empresa", "planificación", "enterprise"],
+        "gestion_proyectos": ["project management", "tareas", "equipos", "colaboración", "proyectos"],
+        "contabilidad": ["finanzas", "accounting", "facturas", "impuestos", "contable"],
+        "inventario": ["stock", "almacén", "warehouse", "productos", "inventario"],
+        "rrhh": ["recursos humanos", "empleados", "nóminas", "hr", "talento"],
+        "email_marketing": ["newsletter", "campañas email", "mailing", "automatización email"],
     }
     
     def __init__(self, load_models: bool = True):

@@ -387,7 +387,10 @@ class PromptAnalyzer:
         BusinessType.SAAS: [
             r'\bsaas\b', r'\bsoftware\s+as\s+a\s+service\b',
             r'\bplataforma\b', r'\bherramienta\s+online\b',
-            r'\bapp\s+web\b', r'\baplicaci[oó]n\s+web\b'
+            r'\bapp\s+web\b', r'\baplicaci[oó]n\s+web\b',
+            r'\bsoftware\s+de\b', r'\bherramienta\s+de\b',
+            r'\bcrm\b', r'\berp\b', r'\bapp\b',
+            r'\bgesti[oó]n\b', r'\bautomatizaci[oó]n\b'
         ],
         BusinessType.AGENCY: [
             r'\bagencia\b', r'\bagency\b', r'\bestudio\b',
@@ -459,6 +462,17 @@ class PromptAnalyzer:
         (r'\bjoyer[ií]a\b|\bjewelry\b|\bjoyas?\b', 'joyería'),
         (r'\brelojes?\b|\bwatches?\b', 'relojes'),
         (r'\bautom[oó]vil(es)?\b|\bcars?\b|\bcoches?\b|\bveh[ií]culos?\b', 'automoción'),
+        
+        # Software/SaaS nichos
+        (r'\bcrm\b|\bclientes?\b|\bcustomer\b', 'crm'),
+        (r'\berp\b|\brecursos?\b|\benterprise\b', 'erp'),
+        (r'\bgesti[oó]n\s*(de\s*)?(proyectos?|tareas?)\b|\bproject\s*management\b', 'gestión de proyectos'),
+        (r'\bcontabilidad\b|\baccounting\b|\bfinanzas?\b', 'contabilidad'),
+        (r'\bfacturaci[oó]n\b|\binvoic', 'facturación'),
+        (r'\binventario\b|\bstock\b|\balmac[eé]n\b', 'inventario'),
+        (r'\brrhh\b|\brecursos\s*humanos\b|\bhr\b', 'recursos humanos'),
+        (r'\bemail\s*marketing\b|\bnewsletter\b|\bmailing\b', 'email marketing'),
+        (r'\bautomatizaci[oó]n\b|\bautomation\b', 'automatización'),
     ]
     
     # Indicadores de métricas que el usuario quiere analizar
