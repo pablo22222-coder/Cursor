@@ -13,7 +13,14 @@ import re
 from typing import List, Tuple, Optional, Dict
 from ..models.domain import PromptIntent, BusinessType
 
-# Intentar cargar el motor de embeddings (opcional)
+# Intentar cargar el nuevo intérprete de prompts
+try:
+    from ..nlp.prompt_interpreter import get_interpreter, PromptSpec
+    INTERPRETER_AVAILABLE = True
+except ImportError:
+    INTERPRETER_AVAILABLE = False
+
+# Fallback al sistema anterior
 try:
     from ..nlp.embeddings import get_embedding_engine, EmbeddingEngine
     from ..nlp.normalizer import AdvancedNormalizer
@@ -484,24 +491,36 @@ class PromptAnalyzer:
         'accesibilidad': [r'\baccesibilidad\b', r'\baccessibility\b'],
     }
     
-    def __init__(self, use_embeddings: bool = True):
+    def __init__(self, use_embeddings: bool = True, use_new_interpreter: bool = True):
         """
         Inicializa el analizador de prompts.
         
         Args:
             use_embeddings: Si usar el sistema de embeddings (más preciso pero más lento)
+            use_new_interpreter: Si usar el nuevo sistema de interpretación avanzado
         """
         self.cleaner = PromptCleaner()
         self.normalizer = PromptNormalizer()
         
-        # Sistema de embeddings (opcional)
+        # Nuevo intérprete avanzado (prioridad)
+        self._interpreter = None
+        self._use_new_interpreter = use_new_interpreter and INTERPRETER_AVAILABLE
+        
+        if self._use_new_interpreter:
+            try:
+                self._interpreter = get_interpreter(load_models=True)
+                print("✓ Nuevo intérprete de prompts activado")
+            except Exception as e:
+                print(f"⚠ No se pudo cargar el nuevo intérprete: {e}")
+                self._use_new_interpreter = False
+        
+        # Sistema de embeddings antiguo (fallback)
         self.embedding_engine = None
         self.advanced_normalizer = None
-        self._use_embeddings = use_embeddings and NLP_AVAILABLE
+        self._use_embeddings = use_embeddings and NLP_AVAILABLE and not self._use_new_interpreter
         
         if self._use_embeddings:
             try:
-                # Cargar modelos de embeddings (puede tardar la primera vez)
                 self.embedding_engine = get_embedding_engine(load_models=True)
                 self.advanced_normalizer = AdvancedNormalizer()
                 print("✓ Sistema de embeddings activado")
@@ -513,9 +532,10 @@ class PromptAnalyzer:
         """
         Analiza el prompt y extrae la intención del usuario.
         
-        SISTEMA DUAL:
-        1. Si hay embeddings: usa similitud semántica (tolera errores)
-        2. Fallback: usa regex/patrones (robusto)
+        SISTEMA:
+        1. Si hay nuevo intérprete: usa PromptInterpreter avanzado
+        2. Si hay embeddings: usa similitud semántica (tolera errores)
+        3. Fallback: usa regex/patrones (robusto)
         
         Args:
             prompt: El prompt del usuario (puede tener errores)
@@ -523,6 +543,11 @@ class PromptAnalyzer:
         Returns:
             PromptIntent con toda la información extraída
         """
+        # NUEVO: Usar el intérprete avanzado si está disponible
+        if self._use_new_interpreter and self._interpreter:
+            return self._analyze_with_interpreter(prompt)
+        
+        # FALLBACK: Sistema anterior
         # Normalización ligera (NFKC, lowercase, collapse spaces)
         if self.advanced_normalizer:
             cleaned_prompt, adv_metadata = self.advanced_normalizer.normalize(prompt)
@@ -570,6 +595,65 @@ class PromptAnalyzer:
             requirements=requirements_data.get("requirements", []),
             search_queries=search_queries,
             confidence=business_confidence
+        )
+    
+    def _analyze_with_interpreter(self, prompt: str) -> PromptIntent:
+        """
+        Analiza el prompt usando el nuevo intérprete avanzado.
+        
+        Convierte PromptSpec a PromptIntent para compatibilidad.
+        
+        Args:
+            prompt: Prompt del usuario
+            
+        Returns:
+            PromptIntent compatible con el sistema existente
+        """
+        # Obtener especificación del intérprete
+        spec = self._interpreter.interpret(prompt)
+        
+        # Mapear business_type a BusinessType enum
+        business_type_map = {
+            "ecommerce": BusinessType.ECOMMERCE,
+            "agency": BusinessType.AGENCY,
+            "saas": BusinessType.SAAS,
+            "dropshipping": BusinessType.DROPSHIPPING,
+            "marketplace": BusinessType.MARKETPLACE,
+        }
+        
+        business_type = business_type_map.get(
+            spec.business_type, 
+            BusinessType.UNKNOWN
+        )
+        
+        # Obtener nicho (primer elemento de la lista o None)
+        niche = spec.niche[0] if spec.niche else None
+        
+        # Generar queries de búsqueda
+        search_queries = self._generate_search_queries(
+            business_type,
+            niche,
+            spec.product_service,
+            [],  # characteristics
+            spec.prompt_original
+        )
+        
+        # Calcular confianza (escalar de 0-1 a 0-100)
+        confidence = int(spec.confidence * 100)
+        
+        # Construir PromptIntent
+        return PromptIntent(
+            business_type=business_type,
+            niche=niche,
+            product_service=spec.product_service,
+            characteristics=[],
+            metrics_to_analyze=[spec.quality] if spec.quality else [],
+            original_prompt=spec.prompt_original,
+            cleaned_prompt=spec.prompt_view,
+            exclusions=spec.must_not,
+            requirements=spec.must_have,
+            search_queries=search_queries,
+            confidence=confidence
         )
     
     def _detect_business_type(self, prompt: str) -> Tuple[BusinessType, int]:
