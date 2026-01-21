@@ -74,7 +74,7 @@ class EmbeddingEngine:
     
     def _load_models(self):
         """Carga los modelos de embeddings."""
-        # Cargar Sentence-Transformers
+        # Cargar Sentence-Transformers (ligero y suficiente)
         try:
             from sentence_transformers import SentenceTransformer
             self.sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
@@ -83,29 +83,24 @@ class EmbeddingEngine:
             print(f"⚠ No se pudo cargar Sentence-Transformers: {e}")
             self.sentence_model = None
         
-        # Cargar FastText (modelo ligero preentrenado)
+        # FastText es OPCIONAL - no lo cargamos automáticamente
+        # porque el modelo español es muy grande (~4GB)
+        # Solo se usa si ya existe el modelo en cache
         try:
             import fasttext
-            import fasttext.util
+            from pathlib import Path
             
-            # Intentar cargar modelo existente o descargar uno ligero
             model_path = Path.home() / ".cache" / "fasttext" / "cc.es.50.bin"
             
-            if not model_path.exists():
-                print("Descargando modelo FastText español (puede tardar)...")
-                model_path.parent.mkdir(parents=True, exist_ok=True)
-                fasttext.util.download_model('es', if_exists='ignore')
-                # Reducir dimensiones para eficiencia
-                ft = fasttext.load_model('cc.es.300.bin')
-                fasttext.util.reduce_model(ft, 50)
-                ft.save_model(str(model_path))
-                self.fasttext_model = ft
-            else:
+            if model_path.exists():
                 self.fasttext_model = fasttext.load_model(str(model_path))
-            
-            print("✓ FastText cargado")
+                print("✓ FastText cargado (desde cache)")
+            else:
+                # NO descargar automáticamente - es muy grande
+                print("ℹ FastText no disponible (modelo no descargado)")
+                print("  El sistema funciona correctamente sin él")
+                self.fasttext_model = None
         except Exception as e:
-            print(f"⚠ No se pudo cargar FastText: {e}")
             self.fasttext_model = None
         
         self._models_loaded = True
