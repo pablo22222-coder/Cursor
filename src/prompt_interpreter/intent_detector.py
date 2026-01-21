@@ -44,6 +44,10 @@ class UserIntent:
     # === EXCLUSIONES ===
     exclusions: List[str] = field(default_factory=list)  # Lo que NO quiere
     
+    # === FILTROS DE HERRAMIENTAS ===
+    required_tools: List[str] = field(default_factory=list)  # Herramientas que DEBE tener
+    excluded_tools: List[str] = field(default_factory=list)  # Herramientas que NO debe tener
+    
     # === TÉRMINOS CLAVE EXTRAÍDOS ===
     main_keywords: List[str] = field(default_factory=list)
     secondary_keywords: List[str] = field(default_factory=list)
@@ -71,6 +75,8 @@ class UserIntent:
             "check_speed": self.check_speed,
             "check_seo": self.check_seo,
             "exclusions": self.exclusions,
+            "required_tools": self.required_tools,
+            "excluded_tools": self.excluded_tools,
             "main_keywords": self.main_keywords,
             "secondary_keywords": self.secondary_keywords,
             "modifiers": self.modifiers,
@@ -269,6 +275,54 @@ class IntentDetector:
         "lenta": ["lenta", "lento", "slow", "carga lenta", "velocidad baja"],
     }
     
+    # === HERRAMIENTAS CONOCIDAS (para filtrado) ===
+    KNOWN_TOOLS = {
+        # CRMs
+        "crm": ["crm", "hubspot", "salesforce", "zoho", "pipedrive", "freshsales", "copper", "monday", "close"],
+        "hubspot": ["hubspot"],
+        "salesforce": ["salesforce"],
+        "zoho": ["zoho", "zoho crm"],
+        "pipedrive": ["pipedrive"],
+        
+        # Chat
+        "chat": ["chat", "livechat", "live chat", "chat en vivo", "widget de chat"],
+        "intercom": ["intercom"],
+        "drift": ["drift"],
+        "crisp": ["crisp"],
+        "zendesk": ["zendesk"],
+        "tidio": ["tidio"],
+        "tawk": ["tawk", "tawk.to"],
+        
+        # Email Marketing
+        "email marketing": ["email marketing", "newsletter", "mailchimp", "klaviyo", "mailerlite"],
+        "mailchimp": ["mailchimp"],
+        "klaviyo": ["klaviyo"],
+        "activecampaign": ["activecampaign", "active campaign"],
+        
+        # Analytics
+        "analytics": ["analytics", "analíticas", "google analytics", "métricas"],
+        "google analytics": ["google analytics", "ga4", "gtag"],
+        "hotjar": ["hotjar"],
+        
+        # Heatmaps
+        "heatmaps": ["heatmap", "heatmaps", "mapas de calor", "grabación de sesiones"],
+        
+        # Popups
+        "popups": ["popup", "popups", "ventanas emergentes", "optinmonster", "sumo"],
+        
+        # Reviews
+        "reviews": ["reviews", "reseñas", "trustpilot", "yotpo"],
+        
+        # Payment
+        "stripe": ["stripe"],
+        "paypal": ["paypal"],
+        
+        # Platforms
+        "wordpress": ["wordpress", "wp"],
+        "shopify": ["shopify"],
+        "woocommerce": ["woocommerce", "woo"],
+    }
+    
     def __init__(self):
         pass
     
@@ -327,6 +381,9 @@ class IntentDetector:
         
         # 10. Extraer modificadores
         intent.modifiers = self._extract_modifiers(prompt_lower)
+        
+        # 11. Detectar filtros de herramientas (que tenga o que NO tenga)
+        intent.required_tools, intent.excluded_tools = self._detect_tool_filters(prompt_lower)
         
         return intent
     
@@ -512,6 +569,78 @@ class IntentDetector:
                 modifiers.append(mod)
         
         return modifiers
+    
+    def _detect_tool_filters(self, prompt: str) -> Tuple[List[str], List[str]]:
+        """
+        Detecta si el usuario quiere filtrar por herramientas.
+        
+        Patrones que detecta:
+        - "que tenga hubspot" -> required_tools = ["hubspot"]
+        - "que no tenga crm" -> excluded_tools = ["crm"]
+        - "sin chat" -> excluded_tools = ["chat"]
+        - "con mailchimp" -> required_tools = ["mailchimp"]
+        - "sin herramientas de email marketing" -> excluded_tools = ["email marketing"]
+        
+        Returns:
+            (required_tools, excluded_tools)
+        """
+        required_tools = []
+        excluded_tools = []
+        
+        # Patrones para herramientas REQUERIDAS
+        required_patterns = [
+            r"(?:que tenga|con|usando|que use|que utilice)\s+(\w+(?:\s+\w+)?)",
+            r"(?:con herramienta de|con sistema de)\s+(\w+(?:\s+\w+)?)",
+        ]
+        
+        # Patrones para herramientas EXCLUIDAS
+        excluded_patterns = [
+            r"(?:que no tenga|sin|que no use|que no utilice|sin usar)\s+(\w+(?:\s+\w+)?)",
+            r"(?:sin herramienta de|sin sistema de|sin ningún|sin ninguna)\s+(\w+(?:\s+\w+)?)",
+            r"(?:no tenga|no use|no utilice)\s+(\w+(?:\s+\w+)?)",
+        ]
+        
+        # Buscar herramientas requeridas
+        for pattern in required_patterns:
+            matches = re.findall(pattern, prompt)
+            for match in matches:
+                tool = self._normalize_tool_name(match.strip())
+                if tool and tool not in required_tools:
+                    required_tools.append(tool)
+        
+        # Buscar herramientas excluidas
+        for pattern in excluded_patterns:
+            matches = re.findall(pattern, prompt)
+            for match in matches:
+                tool = self._normalize_tool_name(match.strip())
+                if tool and tool not in excluded_tools:
+                    excluded_tools.append(tool)
+        
+        return required_tools, excluded_tools
+    
+    def _normalize_tool_name(self, tool_text: str) -> Optional[str]:
+        """
+        Normaliza el nombre de una herramienta detectada.
+        Retorna el nombre canónico o None si no es una herramienta conocida.
+        """
+        tool_lower = tool_text.lower().strip()
+        
+        # Buscar en herramientas conocidas
+        for tool_name, keywords in self.KNOWN_TOOLS.items():
+            for keyword in keywords:
+                if keyword in tool_lower or tool_lower in keyword:
+                    return tool_name
+        
+        # Si no está en la lista pero parece un nombre de herramienta, devolverlo
+        # (permite herramientas no listadas)
+        if len(tool_lower) > 2 and tool_lower not in ["que", "con", "sin", "una", "un", "el", "la"]:
+            # Verificar que no sea una palabra común
+            common_words = ["web", "webs", "página", "páginas", "sitio", "sitios", "tienda", 
+                          "tiendas", "empresa", "empresas", "negocio", "negocios"]
+            if tool_lower not in common_words:
+                return tool_lower
+        
+        return None
 
 
 def detect_intent(prompt: str) -> UserIntent:

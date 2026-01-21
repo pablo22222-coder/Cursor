@@ -36,6 +36,10 @@ class PromptAnalysis:
     required_technologies: List[str] = field(default_factory=list)  # WordPress, Shopify, etc.
     excluded_technologies: List[str] = field(default_factory=list)
     
+    # Filtros de herramientas externas
+    required_tools: List[str] = field(default_factory=list)  # Herramientas que DEBE tener
+    excluded_tools: List[str] = field(default_factory=list)  # Herramientas que NO debe tener
+    
     # Queries de búsqueda generadas
     search_queries: List[str] = field(default_factory=list)
     
@@ -60,6 +64,8 @@ class PromptAnalysis:
             "performance_criteria": self.performance_criteria,
             "required_technologies": self.required_technologies,
             "excluded_technologies": self.excluded_technologies,
+            "required_tools": self.required_tools,
+            "excluded_tools": self.excluded_tools,
             "search_queries": self.search_queries,
             "validation_indicators": self.validation_indicators,
             "exclusion_indicators": self.exclusion_indicators,
@@ -198,6 +204,8 @@ Responde SOLO con el JSON, sin texto adicional ni markdown."""
             check_seo=intent.check_seo,
             performance_criteria=intent.performance_requirement,
             required_technologies=[intent.platform_preference] if intent.platform_preference else [],
+            required_tools=intent.required_tools,
+            excluded_tools=intent.excluded_tools,
             search_queries=search_queries,
             validation_indicators=validation_indicators,
             exclusion_indicators=exclusion_indicators,

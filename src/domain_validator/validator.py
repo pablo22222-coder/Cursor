@@ -217,6 +217,16 @@ class DomainValidator:
                 
                 if tech_score > 50:
                     result.validation_reasons.append(f"Tecnologías compatibles (score: {tech_score:.0f})")
+                
+                # Verificar filtros de herramientas si existen
+                if tech_profile:
+                    tools_ok, tools_reason = self._check_tool_filters(tech_profile, analysis)
+                    if not tools_ok:
+                        # Rechazar si no cumple con los filtros de herramientas
+                        result.rejection_reasons.append(tools_reason)
+                        confidence -= 30
+                    elif tools_reason:
+                        result.validation_reasons.append(tools_reason)
             else:
                 confidence += 50 * 0.2  # Neutral si no se usa
             
@@ -803,6 +813,81 @@ class DomainValidator:
                 penalty += pen
         
         return min(penalty, 40)  # Máximo 40 de penalización
+    
+    def _check_tool_filters(self, tech_profile: TechnologyProfile, analysis: PromptAnalysis) -> tuple:
+        """
+        Verifica si el perfil tecnológico cumple con los filtros de herramientas.
+        
+        Args:
+            tech_profile: Perfil tecnológico de la web
+            analysis: Análisis del prompt con filtros
+            
+        Returns:
+            (cumple: bool, razón: str)
+        """
+        # Obtener filtros del análisis (si existen)
+        required_tools = getattr(analysis, 'required_tools', []) or []
+        excluded_tools = getattr(analysis, 'excluded_tools', []) or []
+        
+        if not required_tools and not excluded_tools:
+            return True, ""
+        
+        all_detected_tools = [t.lower() for t in tech_profile.all_tools]
+        
+        # Verificar herramientas requeridas
+        for required in required_tools:
+            required_lower = required.lower()
+            
+            # Buscar si tiene la herramienta o categoría
+            has_tool = False
+            
+            # Verificar por nombre exacto
+            if any(required_lower in tool for tool in all_detected_tools):
+                has_tool = True
+            
+            # Verificar por categoría
+            if not has_tool:
+                if required_lower == "crm" and tech_profile.has_crm:
+                    has_tool = True
+                elif required_lower in ["chat", "livechat"] and tech_profile.has_chat:
+                    has_tool = True
+                elif required_lower in ["email", "email marketing"] and tech_profile.has_email_marketing:
+                    has_tool = True
+                elif required_lower in ["analytics", "analíticas"] and tech_profile.has_analytics:
+                    has_tool = True
+                elif required_lower in ["heatmap", "heatmaps"] and tech_profile.has_heatmaps:
+                    has_tool = True
+            
+            if not has_tool:
+                return False, f"No tiene {required}"
+        
+        # Verificar herramientas excluidas
+        for excluded in excluded_tools:
+            excluded_lower = excluded.lower()
+            
+            # Verificar por nombre exacto
+            if any(excluded_lower in tool for tool in all_detected_tools):
+                return False, f"Tiene {excluded} (excluido)"
+            
+            # Verificar por categoría
+            if excluded_lower == "crm" and tech_profile.has_crm:
+                return False, f"Tiene CRM: {', '.join(tech_profile.crm)}"
+            elif excluded_lower in ["chat", "livechat"] and tech_profile.has_chat:
+                return False, f"Tiene chat: {', '.join(tech_profile.chat_widgets)}"
+            elif excluded_lower in ["email", "email marketing"] and tech_profile.has_email_marketing:
+                return False, f"Tiene email marketing: {', '.join(tech_profile.email_marketing)}"
+            elif excluded_lower in ["analytics", "analíticas"] and tech_profile.has_analytics:
+                return False, f"Tiene analytics: {', '.join(tech_profile.analytics)}"
+            elif excluded_lower in ["heatmap", "heatmaps"] and tech_profile.has_heatmaps:
+                return False, f"Tiene heatmaps: {', '.join(tech_profile.heatmaps)}"
+        
+        # Todo OK
+        if required_tools:
+            return True, f"Tiene: {', '.join(required_tools)}"
+        if excluded_tools:
+            return True, f"No tiene: {', '.join(excluded_tools)}"
+        
+        return True, ""
     
     def _analyze_technologies(self, url: str, analysis: PromptAnalysis) -> tuple:
         """
