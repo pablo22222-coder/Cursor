@@ -10,6 +10,7 @@ import google.generativeai as genai
 
 from config.settings import get_settings
 from src.prompt_interpreter.query_generator import QueryGenerator
+from src.prompt_interpreter.intent_detector import IntentDetector, UserIntent
 
 
 @dataclass
@@ -172,111 +173,101 @@ Responde SOLO con el JSON, sin texto adicional ni markdown."""
             raise ValueError(f"No se pudo parsear la respuesta de Gemini: {response_text[:500]}")
     
     def _basic_analysis(self, prompt: str) -> PromptAnalysis:
-        """Análisis básico de fallback si Gemini falla. Usa QueryGenerator para queries inteligentes."""
-        prompt_lower = prompt.lower()
+        """
+        Análisis avanzado usando IntentDetector.
+        Extrae TODA la información del prompt sin inventar nada.
+        """
+        # Usar IntentDetector para análisis profundo
+        intent_detector = IntentDetector()
+        intent = intent_detector.detect(prompt)
         
-        # Detectar tipo de negocio
-        business_type = "web"
-        product_category = None
-        service_type = None
-        niche = None
-        
-        # Detectar tipo de negocio
-        if any(word in prompt_lower for word in ["ecommerce", "tienda", "shop", "store", "comprar", "venta"]):
-            business_type = "ecommerce"
-        elif any(word in prompt_lower for word in ["saas", "software", "app", "plataforma", "tool", "herramienta"]):
-            business_type = "saas"
-        elif any(word in prompt_lower for word in ["agencia", "agency", "servicios", "consultora", "consultoría"]):
-            business_type = "agencia"
-        elif any(word in prompt_lower for word in ["blog", "revista", "magazine", "noticias"]):
-            business_type = "blog"
-        
-        # Extraer categoría/servicio del prompt
-        # Buscar patrones como "ecommerce de X", "tienda de X", "agencia de X"
-        patterns = [
-            r"(?:ecommerce|tienda|shop|store|venta)\s+(?:de\s+)?(.+?)(?:\s+online|\s+en\s+|\s*$)",
-            r"(?:agencia|agency|consultor[aí]a?)\s+(?:de\s+)?(.+?)(?:\s+en\s+|\s*$)",
-            r"(?:saas|software|plataforma|app|herramienta)\s+(?:de|para)\s+(.+?)(?:\s+online|\s*$)",
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, prompt_lower)
-            if match:
-                extracted = match.group(1).strip()
-                if business_type == "ecommerce":
-                    product_category = extracted
-                else:
-                    service_type = extracted
-                break
-        
-        # Detectar nicho
-        niche_keywords = {
-            "luxury": ["lujo", "premium", "exclusivo", "luxury"],
-            "eco": ["ecológico", "natural", "orgánico", "eco", "sostenible"],
-            "vintage": ["vintage", "retro", "antiguo", "second hand"],
-            "budget": ["barato", "económico", "low cost"],
-            "old money": ["old money", "clásico", "elegante"],
-        }
-        
-        for niche_name, keywords in niche_keywords.items():
-            if any(kw in prompt_lower for kw in keywords):
-                niche = niche_name
-                break
-        
-        # Usar QueryGenerator para queries inteligentes
+        # Usar QueryGenerator con la intención detectada
         query_gen = QueryGenerator()
-        search_queries = query_gen.generate_queries(
-            business_type=business_type,
-            main_term=product_category or service_type or prompt,
-            product_category=product_category,
-            service_type=service_type,
-            niche=niche,
-            max_queries=15
-        )
+        search_queries = query_gen.generate_from_intent(intent, max_queries=20)
         
-        # Indicadores de validación según tipo de negocio
-        if business_type == "ecommerce":
-            validation_indicators = [
-                "añadir al carrito", "add to cart", "comprar", "buy now",
-                "precio", "price", "€", "$", "envío", "shipping",
-                "carrito", "cart", "checkout", "pagar"
-            ]
-            exclusion_indicators = [
-                "qué es", "definición", "cómo crear", "tutorial",
-                "wikipedia", "guía", "artículo", "blog post"
-            ]
-        elif business_type == "saas":
-            validation_indicators = [
-                "pricing", "precios", "planes", "free trial", "prueba gratis",
-                "registrarse", "sign up", "login", "dashboard", "features"
-            ]
-            exclusion_indicators = [
-                "qué es", "definición", "alternativas", "review",
-                "comparativa", "wikipedia", "blog"
-            ]
-        elif business_type == "agencia":
-            validation_indicators = [
-                "nuestros servicios", "portfolio", "casos de éxito",
-                "clientes", "equipo", "contacto", "presupuesto", "about us"
-            ]
-            exclusion_indicators = [
-                "cómo montar", "qué es", "definición", "curso",
-                "wikipedia", "guía para crear"
-            ]
-        else:
-            validation_indicators = ["contacto", "servicios", "productos", "sobre nosotros"]
-            exclusion_indicators = ["wikipedia", "qué es", "definición", "guía"]
+        # Generar indicadores de validación según tipo de negocio e intención
+        validation_indicators, exclusion_indicators = self._get_indicators_from_intent(intent)
         
         return PromptAnalysis(
-            business_type=business_type,
-            product_category=product_category,
-            service_type=service_type,
-            niche=niche,
+            business_type=intent.business_type,
+            product_category=intent.product_category,
+            service_type=intent.service_type,
+            niche=intent.niche,
+            target_audience=intent.target_audience,
+            check_performance=intent.check_speed,
+            check_seo=intent.check_seo,
+            performance_criteria=intent.performance_requirement,
+            required_technologies=[intent.platform_preference] if intent.platform_preference else [],
             search_queries=search_queries,
             validation_indicators=validation_indicators,
             exclusion_indicators=exclusion_indicators,
             original_prompt=prompt
         )
+    
+    def _get_indicators_from_intent(self, intent: UserIntent) -> tuple:
+        """Genera indicadores de validación basados en la intención detectada."""
+        validation_indicators = []
+        exclusion_indicators = [
+            "qué es", "definición", "cómo crear", "tutorial",
+            "wikipedia", "guía completa", "artículo", "blog post",
+            "curso de", "aprende a"
+        ]
+        
+        bt = intent.business_type.lower()
+        
+        if bt in ["ecommerce", "tienda", "shop", "marketplace"]:
+            validation_indicators = [
+                "añadir al carrito", "add to cart", "comprar", "buy now",
+                "precio", "price", "€", "$", "envío", "shipping",
+                "carrito", "cart", "checkout", "pagar", "stock",
+                "talla", "color", "cantidad", "productos"
+            ]
+            # Si tiene nicho específico, añadir indicadores
+            if intent.niche == "eco":
+                validation_indicators.extend(["ecológico", "natural", "orgánico", "sostenible"])
+            elif intent.niche == "luxury":
+                validation_indicators.extend(["premium", "exclusivo", "lujo"])
+                
+        elif bt in ["saas", "software", "plataforma", "app"]:
+            validation_indicators = [
+                "pricing", "precios", "planes", "free trial", "prueba gratis",
+                "registrarse", "sign up", "login", "dashboard", "features",
+                "características", "integraciones", "api", "demo"
+            ]
+            
+        elif bt in ["agencia", "agency", "consultora"]:
+            validation_indicators = [
+                "nuestros servicios", "portfolio", "casos de éxito",
+                "clientes", "equipo", "contacto", "presupuesto", "about us",
+                "sobre nosotros", "trabajos", "proyectos"
+            ]
+            # Si tiene ubicación, añadir indicadores locales
+            if intent.location:
+                validation_indicators.extend([intent.location, "dirección", "oficina"])
+                
+        elif bt == "blog":
+            validation_indicators = [
+                "artículos", "posts", "categorías", "autor", "publicado",
+                "suscríbete", "newsletter"
+            ]
+            # Los blogs SÍ son informativos, ajustar exclusiones
+            exclusion_indicators = ["wikipedia", "definición de diccionario"]
+            
+        else:
+            validation_indicators = [
+                "contacto", "servicios", "productos", "sobre nosotros",
+                "empresa", "equipo"
+            ]
+        
+        # Añadir keywords principales como indicadores
+        if intent.main_keywords:
+            validation_indicators.extend(intent.main_keywords)
+        
+        # Añadir industria como indicador si existe
+        if intent.industry:
+            validation_indicators.append(intent.industry)
+        
+        return validation_indicators, exclusion_indicators
     
     def generate_additional_queries(self, analysis: PromptAnalysis, count: int = 5) -> List[str]:
         """

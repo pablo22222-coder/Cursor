@@ -2,8 +2,11 @@
 Generador avanzado de queries de búsqueda.
 Crea queries inteligentes para encontrar webs que SEAN lo buscado, no que hablen de ello.
 """
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, TYPE_CHECKING
 from dataclasses import dataclass
+
+if TYPE_CHECKING:
+    from src.prompt_interpreter.intent_detector import UserIntent
 
 
 @dataclass
@@ -340,6 +343,325 @@ class QueryGenerator:
             ]
 
 
+    def generate_from_intent(self, intent: 'UserIntent', max_queries: int = 20) -> List[str]:
+        """
+        Genera queries súper optimizadas basadas en la intención completa del usuario.
+        
+        Esta es la función principal que usa TODA la información detectada del prompt
+        para crear las queries más precisas posibles.
+        
+        Args:
+            intent: UserIntent con toda la información extraída del prompt
+            max_queries: Número máximo de queries a generar
+            
+        Returns:
+            Lista de queries optimizadas ordenadas por relevancia
+        """
+        queries = []
+        
+        # Término principal de búsqueda
+        main_term = intent.get_search_term()
+        
+        # === 1. QUERIES PRINCIPALES BASADAS EN TIPO DE NEGOCIO ===
+        base_queries = self._generate_base_queries(intent, main_term)
+        queries.extend(base_queries)
+        
+        # === 2. QUERIES CON INDICADORES DE NEGOCIO REAL ===
+        indicator_queries = self._generate_indicator_queries(intent, main_term)
+        queries.extend(indicator_queries)
+        
+        # === 3. QUERIES POR UBICACIÓN (si se especificó) ===
+        if intent.location:
+            location_queries = self._generate_location_queries(intent, main_term)
+            queries.extend(location_queries)
+        
+        # === 4. QUERIES POR NICHO/ESTILO (si se detectó) ===
+        if intent.niche or intent.style:
+            niche_queries = self._generate_niche_queries(intent, main_term)
+            queries.extend(niche_queries)
+        
+        # === 5. QUERIES POR AUDIENCIA (si se detectó) ===
+        if intent.target_audience:
+            audience_queries = self._generate_audience_queries(intent, main_term)
+            queries.extend(audience_queries)
+        
+        # === 6. QUERIES POR INDUSTRIA (si se detectó) ===
+        if intent.industry:
+            industry_queries = self._generate_industry_queries(intent, main_term)
+            queries.extend(industry_queries)
+        
+        # === 7. QUERIES CON EXCLUSIONES ===
+        exclusion_queries = self._generate_exclusion_queries(intent, main_term)
+        queries.extend(exclusion_queries)
+        
+        # === 8. QUERIES TRANSACCIONALES ===
+        transactional_queries = self._generate_transactional_queries(intent, main_term)
+        queries.extend(transactional_queries)
+        
+        # === 9. QUERIES POR PLATAFORMA (si se especificó) ===
+        if intent.platform_preference:
+            platform_queries = self._generate_platform_queries(intent, main_term)
+            queries.extend(platform_queries)
+        
+        # Ordenar por peso y eliminar duplicados
+        queries.sort(key=lambda x: x[1], reverse=True)
+        seen = set()
+        unique_queries = []
+        for query, weight in queries:
+            query_normalized = query.lower().strip()
+            if query_normalized not in seen and len(query_normalized) > 5:
+                seen.add(query_normalized)
+                unique_queries.append(query)
+        
+        return unique_queries[:max_queries]
+    
+    def _generate_base_queries(self, intent: 'UserIntent', main_term: str) -> List[tuple]:
+        """Genera queries base según tipo de negocio."""
+        queries = []
+        bt = intent.business_type.lower()
+        
+        if bt in ["ecommerce", "tienda", "shop", "marketplace"]:
+            queries.extend([
+                (f"comprar {main_term} online", 1.0),
+                (f"tienda {main_term} online", 1.0),
+                (f"tienda de {main_term}", 0.95),
+                (f"tienda online {main_term}", 0.95),
+                (f"{main_term} shop", 0.9),
+                (f"venta de {main_term}", 0.85),
+            ])
+        elif bt in ["saas", "software", "plataforma", "app", "webapp"]:
+            queries.extend([
+                (f"{main_term} software", 1.0),
+                (f"{main_term} herramienta online", 1.0),
+                (f"{main_term} plataforma", 0.95),
+                (f"software de {main_term}", 0.95),
+                (f"{main_term} tool", 0.9),
+                (f"{main_term} app", 0.85),
+            ])
+        elif bt in ["agencia", "agency", "consultora", "consultoría"]:
+            queries.extend([
+                (f"agencia de {main_term}", 1.0),
+                (f"agencia {main_term}", 1.0),
+                (f"empresa de {main_term}", 0.95),
+                (f"consultoría {main_term}", 0.9),
+                (f"{main_term} agency", 0.85),
+            ])
+        elif bt == "blog":
+            queries.extend([
+                (f"blog de {main_term}", 1.0),
+                (f"revista {main_term}", 0.9),
+                (f"{main_term} magazine", 0.85),
+            ])
+        else:
+            queries.extend([
+                (f"{main_term}", 1.0),
+                (f"{main_term} online", 0.9),
+                (f"{main_term} web", 0.85),
+            ])
+        
+        return queries
+    
+    def _generate_indicator_queries(self, intent: 'UserIntent', main_term: str) -> List[tuple]:
+        """Genera queries con indicadores de negocio real."""
+        queries = []
+        bt = intent.business_type.lower()
+        
+        if bt in ["ecommerce", "tienda", "shop", "marketplace"]:
+            queries.extend([
+                (f'"{main_term}" "añadir al carrito"', 0.95),
+                (f'"{main_term}" "comprar ahora"', 0.95),
+                (f'"{main_term}" "precio" "envío"', 0.9),
+                (f'{main_term} "checkout"', 0.85),
+            ])
+        elif bt in ["saas", "software", "plataforma"]:
+            queries.extend([
+                (f'"{main_term}" "free trial"', 0.95),
+                (f'"{main_term}" "prueba gratis"', 0.95),
+                (f'"{main_term}" pricing', 0.9),
+                (f'"{main_term}" "registrarse"', 0.85),
+            ])
+        elif bt in ["agencia", "agency"]:
+            queries.extend([
+                (f'agencia {main_term} "portfolio"', 0.95),
+                (f'agencia {main_term} "nuestros servicios"', 0.95),
+                (f'agencia {main_term} "casos de éxito"', 0.9),
+                (f'agencia {main_term} "clientes"', 0.85),
+            ])
+        
+        return queries
+    
+    def _generate_location_queries(self, intent: 'UserIntent', main_term: str) -> List[tuple]:
+        """Genera queries con ubicación."""
+        queries = []
+        location = intent.location
+        bt = intent.business_type.lower()
+        
+        if bt in ["ecommerce", "tienda"]:
+            queries.extend([
+                (f"tienda {main_term} {location}", 0.9),
+                (f"comprar {main_term} {location}", 0.85),
+                (f"{main_term} online {location}", 0.8),
+            ])
+        elif bt in ["agencia", "agency"]:
+            queries.extend([
+                (f"agencia {main_term} {location}", 0.95),
+                (f"agencia {main_term} en {location}", 0.9),
+                (f"empresa {main_term} {location}", 0.85),
+            ])
+        elif bt in ["saas", "software"]:
+            queries.extend([
+                (f"{main_term} software {location}", 0.85),
+                (f"{main_term} plataforma {location}", 0.8),
+            ])
+        else:
+            queries.extend([
+                (f"{main_term} {location}", 0.85),
+                (f"{main_term} en {location}", 0.8),
+            ])
+        
+        return queries
+    
+    def _generate_niche_queries(self, intent: 'UserIntent', main_term: str) -> List[tuple]:
+        """Genera queries con nicho/estilo."""
+        queries = []
+        niche = intent.niche
+        style = intent.style
+        bt = intent.business_type.lower()
+        
+        # Mapear nicho a keywords de búsqueda
+        niche_keywords = {
+            "luxury": ["lujo", "premium", "exclusivo"],
+            "budget": ["barato", "económico", "ofertas"],
+            "eco": ["ecológico", "natural", "sostenible", "orgánico"],
+            "vintage": ["vintage", "retro", "segunda mano"],
+            "artesanal": ["artesanal", "handmade", "hecho a mano"],
+            "old_money": ["old money", "clásico", "elegante"],
+            "minimalista": ["minimalista", "minimal"],
+            "streetwear": ["streetwear", "urban"],
+        }
+        
+        keywords_to_use = []
+        if niche and niche in niche_keywords:
+            keywords_to_use.extend(niche_keywords[niche][:2])
+        if style and style in niche_keywords and style != niche:
+            keywords_to_use.extend(niche_keywords[style][:1])
+        
+        for kw in keywords_to_use:
+            if bt in ["ecommerce", "tienda"]:
+                queries.extend([
+                    (f"tienda {main_term} {kw}", 0.9),
+                    (f"{main_term} {kw} online", 0.85),
+                ])
+            else:
+                queries.extend([
+                    (f"{main_term} {kw}", 0.85),
+                ])
+        
+        return queries
+    
+    def _generate_audience_queries(self, intent: 'UserIntent', main_term: str) -> List[tuple]:
+        """Genera queries con audiencia objetivo."""
+        queries = []
+        audience = intent.target_audience
+        bt = intent.business_type.lower()
+        
+        audience_terms = {
+            "b2b": ["para empresas", "empresarial", "business"],
+            "b2c": ["para consumidores"],
+            "mujeres": ["para mujer", "femenino", "women"],
+            "hombres": ["para hombre", "masculino", "men"],
+            "jóvenes": ["juvenil", "joven"],
+            "profesionales": ["profesional", "expertos"],
+        }
+        
+        if audience and audience in audience_terms:
+            for term in audience_terms[audience][:2]:
+                if bt in ["ecommerce", "tienda"]:
+                    queries.append((f"tienda {main_term} {term}", 0.85))
+                elif bt in ["saas", "software"]:
+                    queries.append((f"{main_term} software {term}", 0.85))
+                else:
+                    queries.append((f"{main_term} {term}", 0.8))
+        
+        return queries
+    
+    def _generate_industry_queries(self, intent: 'UserIntent', main_term: str) -> List[tuple]:
+        """Genera queries con industria específica."""
+        queries = []
+        industry = intent.industry
+        bt = intent.business_type.lower()
+        
+        if industry:
+            if bt in ["ecommerce", "tienda"]:
+                queries.append((f"tienda {industry} {main_term}", 0.8))
+            elif bt in ["agencia"]:
+                queries.append((f"agencia {main_term} sector {industry}", 0.8))
+            else:
+                queries.append((f"{main_term} {industry}", 0.75))
+        
+        return queries
+    
+    def _generate_exclusion_queries(self, intent: 'UserIntent', main_term: str) -> List[tuple]:
+        """Genera queries con exclusiones para evitar contenido informativo."""
+        queries = []
+        bt = intent.business_type.lower()
+        
+        exclusions = '-"qué es" -wikipedia -"definición" -"guía de" -tutorial'
+        
+        if bt in ["ecommerce", "tienda"]:
+            queries.append((f"{main_term} tienda online {exclusions}", 0.9))
+            queries.append((f"comprar {main_term} {exclusions}", 0.85))
+        elif bt in ["saas", "software"]:
+            queries.append((f"{main_term} software {exclusions}", 0.9))
+        elif bt in ["agencia"]:
+            queries.append((f"agencia {main_term} {exclusions}", 0.9))
+        else:
+            queries.append((f"{main_term} {exclusions}", 0.85))
+        
+        return queries
+    
+    def _generate_transactional_queries(self, intent: 'UserIntent', main_term: str) -> List[tuple]:
+        """Genera queries con intención transaccional fuerte."""
+        queries = []
+        bt = intent.business_type.lower()
+        
+        if bt in ["ecommerce", "tienda"]:
+            queries.extend([
+                (f"comprar {main_term}", 0.9),
+                (f"precio {main_term}", 0.85),
+                (f"dónde comprar {main_term}", 0.85),
+                (f"{main_term} envío rápido", 0.8),
+            ])
+        elif bt in ["saas", "software"]:
+            queries.extend([
+                (f"{main_term} pricing", 0.9),
+                (f"probar {main_term} gratis", 0.85),
+                (f"contratar {main_term}", 0.8),
+            ])
+        elif bt in ["agencia"]:
+            queries.extend([
+                (f"contratar agencia {main_term}", 0.9),
+                (f"presupuesto {main_term}", 0.85),
+                (f"servicios {main_term}", 0.8),
+            ])
+        
+        return queries
+    
+    def _generate_platform_queries(self, intent: 'UserIntent', main_term: str) -> List[tuple]:
+        """Genera queries específicas por plataforma."""
+        queries = []
+        platform = intent.platform_preference
+        bt = intent.business_type.lower()
+        
+        if platform and bt in ["ecommerce", "tienda"]:
+            queries.extend([
+                (f"tienda {main_term} {platform}", 0.85),
+                (f"{main_term} {platform} store", 0.8),
+            ])
+        
+        return queries
+
+
 # Función de conveniencia
 def generate_smart_queries(prompt: str, 
                           business_type: str,
@@ -368,3 +690,17 @@ def generate_smart_queries(prompt: str,
         niche=niche,
         max_queries=max_queries
     )
+
+
+def generate_from_intent(intent: 'UserIntent', max_queries: int = 20) -> List[str]:
+    """
+    Genera queries súper optimizadas a partir de la intención del usuario.
+    
+    Ejemplo:
+        from src.prompt_interpreter.intent_detector import detect_intent
+        
+        intent = detect_intent("tienda de ropa old money en madrid")
+        queries = generate_from_intent(intent)
+    """
+    generator = QueryGenerator()
+    return generator.generate_from_intent(intent, max_queries)
