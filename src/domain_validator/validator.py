@@ -1,9 +1,11 @@
 """
 Validador de dominios.
 Verifica si un dominio cumple con los criterios especificados en el prompt.
+Incluye análisis de Schema.org / JSON-LD para validación precisa.
 """
 import requests
 import re
+import json
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -13,6 +15,70 @@ from src.prompt_interpreter.gemini_interpreter import PromptAnalysis
 from src.web_analyzer.webtech_analyzer import WebTechAnalyzer, TechnologyProfile
 from src.web_analyzer.pagespeed_analyzer import PageSpeedAnalyzer, PerformanceMetrics
 from src.web_search.serper_search import SearchResult
+
+
+@dataclass
+class SchemaData:
+    """Datos estructurados Schema.org extraídos de la página."""
+    
+    # Tipos Schema.org detectados
+    types: List[str] = field(default_factory=list)  # Product, Organization, LocalBusiness, etc.
+    
+    # Datos específicos extraídos
+    organization_name: Optional[str] = None
+    organization_type: Optional[str] = None
+    
+    # Datos de producto (si es ecommerce)
+    has_products: bool = False
+    product_count: int = 0
+    product_names: List[str] = field(default_factory=list)
+    price_range: Optional[str] = None
+    currency: Optional[str] = None
+    
+    # Datos de negocio local
+    is_local_business: bool = False
+    business_type: Optional[str] = None
+    address: Optional[str] = None
+    
+    # Datos de servicio
+    has_services: bool = False
+    service_types: List[str] = field(default_factory=list)
+    
+    # Otros datos
+    has_offers: bool = False
+    has_reviews: bool = False
+    aggregate_rating: Optional[float] = None
+    
+    # Indicadores de tipo de web
+    is_ecommerce: bool = False
+    is_blog: bool = False
+    is_service_business: bool = False
+    is_software: bool = False
+    
+    # Raw data
+    raw_schemas: List[Dict] = field(default_factory=list)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "types": self.types,
+            "organization_name": self.organization_name,
+            "organization_type": self.organization_type,
+            "has_products": self.has_products,
+            "product_count": self.product_count,
+            "product_names": self.product_names[:5],  # Limitar a 5
+            "price_range": self.price_range,
+            "is_local_business": self.is_local_business,
+            "business_type": self.business_type,
+            "has_services": self.has_services,
+            "service_types": self.service_types[:5],
+            "has_offers": self.has_offers,
+            "has_reviews": self.has_reviews,
+            "aggregate_rating": self.aggregate_rating,
+            "is_ecommerce": self.is_ecommerce,
+            "is_blog": self.is_blog,
+            "is_service_business": self.is_service_business,
+            "is_software": self.is_software
+        }
 
 
 @dataclass
@@ -33,6 +99,7 @@ class ValidationResult:
     search_result: Optional[Dict[str, Any]] = None
     tech_profile: Optional[Dict[str, Any]] = None
     performance_metrics: Optional[Dict[str, Any]] = None
+    schema_data: Optional[Dict[str, Any]] = None  # NUEVO: Datos Schema.org
     
     # Contenido analizado
     page_title: str = ""
@@ -55,6 +122,7 @@ class ValidationResult:
             "page_description": self.page_description,
             "detected_keywords": self.detected_keywords,
             "tech_profile": self.tech_profile,
+            "schema_data": self.schema_data,
             "performance_metrics": self.performance_metrics,
             "analysis_complete": self.analysis_complete,
             "error_message": self.error_message
@@ -118,18 +186,28 @@ class DomainValidator:
             else:
                 result.rejection_reasons.append(f"Snippet poco relevante (score: {snippet_score:.0f})")
             
-            # 2. Análisis del contenido de la página
+            # 2. Análisis del contenido de la página (incluye Schema.org)
             content_score, page_data = self._analyze_page_content(search_result.url, analysis)
             confidence += content_score * 0.4  # 40% del peso
             
             result.page_title = page_data.get("title", "")
             result.page_description = page_data.get("description", "")
             result.detected_keywords = page_data.get("keywords", [])
+            result.schema_data = page_data.get("schema_data")
             
             if content_score > 50:
                 result.validation_reasons.append(f"Contenido relevante (score: {content_score:.0f})")
             else:
                 result.rejection_reasons.append(f"Contenido poco relevante (score: {content_score:.0f})")
+            
+            # Añadir razón si Schema.org confirma el tipo
+            if result.schema_data:
+                if result.schema_data.get("is_ecommerce") and analysis.business_type == "ecommerce":
+                    result.validation_reasons.append("Schema.org confirma ecommerce")
+                elif result.schema_data.get("is_software") and analysis.business_type in ["saas", "software"]:
+                    result.validation_reasons.append("Schema.org confirma software")
+                elif result.schema_data.get("is_service_business") and analysis.business_type in ["agencia", "agency"]:
+                    result.validation_reasons.append("Schema.org confirma servicios")
             
             # 3. Análisis de tecnologías (si está habilitado)
             if self.use_webtech:
@@ -207,13 +285,14 @@ class DomainValidator:
     
     def _analyze_page_content(self, url: str, analysis: PromptAnalysis) -> tuple:
         """
-        Analiza el contenido real de la página.
+        Analiza el contenido real de la página incluyendo Schema.org/JSON-LD.
         Retorna (score, page_data).
         """
         page_data = {
             "title": "",
             "description": "",
-            "keywords": []
+            "keywords": [],
+            "schema_data": None
         }
         
         try:
@@ -240,18 +319,62 @@ class DomainValidator:
                 r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']+)["\']',
                 html, re.IGNORECASE
             )
+            if not desc_match:
+                # Intentar formato alternativo
+                desc_match = re.search(
+                    r'<meta[^>]*content=["\']([^"\']+)["\'][^>]*name=["\']description["\']',
+                    html, re.IGNORECASE
+                )
             if desc_match:
                 page_data["description"] = desc_match.group(1).strip()
             
+            # Extraer meta keywords
+            keywords_match = re.search(
+                r'<meta[^>]*name=["\']keywords["\'][^>]*content=["\']([^"\']+)["\']',
+                html, re.IGNORECASE
+            )
+            if keywords_match:
+                meta_keywords = [k.strip() for k in keywords_match.group(1).split(',')]
+                page_data["keywords"].extend(meta_keywords[:5])
+            
+            # Extraer Open Graph type
+            og_type_match = re.search(
+                r'<meta[^>]*property=["\']og:type["\'][^>]*content=["\']([^"\']+)["\']',
+                html, re.IGNORECASE
+            )
+            if og_type_match:
+                og_type = og_type_match.group(1)
+                page_data["keywords"].append(f"og:{og_type}")
+            
+            # === NUEVO: Extraer y analizar Schema.org / JSON-LD ===
+            schema_data = self._extract_schema_data(html)
+            page_data["schema_data"] = schema_data.to_dict() if schema_data else None
+            
             score = 50.0
+            
+            # === Scoring basado en Schema.org ===
+            if schema_data:
+                schema_score = self._score_from_schema(schema_data, analysis)
+                score += schema_score
+                
+                # Añadir tipos de schema a keywords
+                for schema_type in schema_data.types[:3]:
+                    page_data["keywords"].append(f"schema:{schema_type}")
             
             # Verificar tipo de negocio según el análisis
             if analysis.business_type == "ecommerce":
                 score = self._score_ecommerce(html_lower, score)
+                # Bonus si Schema confirma ecommerce
+                if schema_data and schema_data.is_ecommerce:
+                    score += 15
             elif analysis.business_type == "saas":
                 score = self._score_saas(html_lower, score)
+                if schema_data and schema_data.is_software:
+                    score += 15
             elif analysis.business_type == "agencia":
                 score = self._score_agency(html_lower, score)
+                if schema_data and schema_data.is_service_business:
+                    score += 15
             else:
                 # Scoring genérico
                 score = self._score_generic_business(html_lower, analysis, score)
@@ -261,11 +384,23 @@ class DomainValidator:
                 if analysis.product_category.lower() in html_lower:
                     score += 15
                     page_data["keywords"].append(analysis.product_category)
+                # Verificar si el producto está en Schema
+                if schema_data and schema_data.product_names:
+                    for product in schema_data.product_names:
+                        if analysis.product_category.lower() in product.lower():
+                            score += 10
+                            break
             
             if analysis.service_type:
                 if analysis.service_type.lower() in html_lower:
                     score += 15
                     page_data["keywords"].append(analysis.service_type)
+                # Verificar si el servicio está en Schema
+                if schema_data and schema_data.service_types:
+                    for service in schema_data.service_types:
+                        if analysis.service_type.lower() in service.lower():
+                            score += 10
+                            break
             
             if analysis.niche:
                 if analysis.niche.lower() in html_lower:
@@ -281,10 +416,273 @@ class DomainValidator:
             informative_score = self._check_informative_content(html_lower)
             score -= informative_score
             
+            # Penalizar si Schema indica que es blog/artículo
+            if schema_data and schema_data.is_blog and analysis.business_type != "blog":
+                score -= 20
+            
             return max(0, min(100, score)), page_data
             
         except Exception as e:
             return 30, page_data
+    
+    def _extract_schema_data(self, html: str) -> Optional[SchemaData]:
+        """
+        Extrae y parsea datos Schema.org / JSON-LD del HTML.
+        
+        Busca:
+        - <script type="application/ld+json">
+        - Analiza @type para determinar tipo de negocio
+        - Extrae información relevante de productos, servicios, organización
+        """
+        schema = SchemaData()
+        
+        try:
+            # Buscar todos los bloques JSON-LD
+            jsonld_pattern = r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>'
+            matches = re.findall(jsonld_pattern, html, re.DOTALL | re.IGNORECASE)
+            
+            if not matches:
+                return None
+            
+            for match in matches:
+                try:
+                    # Limpiar el JSON
+                    json_str = match.strip()
+                    # Remover comentarios HTML si existen
+                    json_str = re.sub(r'<!--.*?-->', '', json_str, flags=re.DOTALL)
+                    
+                    data = json.loads(json_str)
+                    schema.raw_schemas.append(data)
+                    
+                    # Procesar el schema (puede ser objeto único o array)
+                    if isinstance(data, list):
+                        for item in data:
+                            self._process_schema_item(item, schema)
+                    else:
+                        self._process_schema_item(data, schema)
+                        
+                except json.JSONDecodeError:
+                    continue
+            
+            # Determinar tipo de web basado en los schemas encontrados
+            self._determine_web_type(schema)
+            
+            return schema if schema.types else None
+            
+        except Exception:
+            return None
+    
+    def _process_schema_item(self, item: Dict, schema: SchemaData):
+        """Procesa un item de Schema.org y extrae información relevante."""
+        if not isinstance(item, dict):
+            return
+        
+        # Obtener el tipo (@type)
+        schema_type = item.get("@type", "")
+        if isinstance(schema_type, list):
+            schema_types = schema_type
+        else:
+            schema_types = [schema_type] if schema_type else []
+        
+        for st in schema_types:
+            if st and st not in schema.types:
+                schema.types.append(st)
+        
+        # Procesar según el tipo
+        for schema_type in schema_types:
+            schema_type_lower = schema_type.lower() if schema_type else ""
+            
+            # === PRODUCTOS ===
+            if schema_type_lower in ["product", "productgroup", "indivisualproduct"]:
+                schema.has_products = True
+                schema.product_count += 1
+                
+                name = item.get("name", "")
+                if name and name not in schema.product_names:
+                    schema.product_names.append(name)
+                
+                # Extraer precio
+                offers = item.get("offers", {})
+                if isinstance(offers, dict):
+                    price = offers.get("price") or offers.get("lowPrice")
+                    currency = offers.get("priceCurrency", "")
+                    if price:
+                        schema.price_range = f"{price} {currency}".strip()
+                        schema.currency = currency
+                    schema.has_offers = True
+                elif isinstance(offers, list) and offers:
+                    schema.has_offers = True
+            
+            # === ORGANIZACIÓN / EMPRESA ===
+            elif schema_type_lower in ["organization", "corporation", "localbusiness", 
+                                        "store", "onlinestore", "shoppingcenter"]:
+                schema.organization_name = item.get("name", "")
+                schema.organization_type = schema_type
+                
+                if schema_type_lower in ["localbusiness", "store"]:
+                    schema.is_local_business = True
+                    schema.business_type = schema_type
+                    
+                    address = item.get("address", {})
+                    if isinstance(address, dict):
+                        schema.address = address.get("streetAddress", "")
+            
+            # === NEGOCIO LOCAL ESPECÍFICO ===
+            elif schema_type_lower in ["restaurant", "hotel", "medicalclinic", "dentist",
+                                        "beautysalon", "hairsalon", "spa", "gym",
+                                        "autodealer", "realestateagent"]:
+                schema.is_local_business = True
+                schema.business_type = schema_type
+                schema.is_service_business = True
+                schema.organization_name = item.get("name", "")
+            
+            # === SERVICIOS ===
+            elif schema_type_lower in ["service", "professionalservice", "financialservice",
+                                        "legalservice", "medicalservice"]:
+                schema.has_services = True
+                schema.is_service_business = True
+                
+                name = item.get("name", "")
+                if name and name not in schema.service_types:
+                    schema.service_types.append(name)
+            
+            # === SOFTWARE / SAAS ===
+            elif schema_type_lower in ["softwareapplication", "webapplication", 
+                                        "mobileapplication", "saasapplication"]:
+                schema.is_software = True
+                schema.organization_name = item.get("name", "")
+            
+            # === BLOG / ARTÍCULO ===
+            elif schema_type_lower in ["article", "newsarticle", "blogposting", 
+                                        "blog", "webpage"]:
+                if schema_type_lower in ["article", "newsarticle", "blogposting", "blog"]:
+                    schema.is_blog = True
+            
+            # === OFERTAS ===
+            elif schema_type_lower == "offer":
+                schema.has_offers = True
+                price = item.get("price")
+                if price:
+                    schema.price_range = str(price)
+            
+            # === REVIEWS ===
+            elif schema_type_lower in ["review", "aggregaterating"]:
+                schema.has_reviews = True
+                if schema_type_lower == "aggregaterating":
+                    rating = item.get("ratingValue")
+                    if rating:
+                        try:
+                            schema.aggregate_rating = float(rating)
+                        except:
+                            pass
+        
+        # Procesar agregado de rating si existe dentro del item
+        if "aggregateRating" in item:
+            schema.has_reviews = True
+            rating = item["aggregateRating"].get("ratingValue")
+            if rating:
+                try:
+                    schema.aggregate_rating = float(rating)
+                except:
+                    pass
+        
+        # Procesar items anidados (ej: @graph)
+        if "@graph" in item:
+            for sub_item in item["@graph"]:
+                self._process_schema_item(sub_item, schema)
+        
+        # Procesar mainEntity si existe
+        if "mainEntity" in item:
+            main_entity = item["mainEntity"]
+            if isinstance(main_entity, dict):
+                self._process_schema_item(main_entity, schema)
+            elif isinstance(main_entity, list):
+                for entity in main_entity:
+                    self._process_schema_item(entity, schema)
+    
+    def _determine_web_type(self, schema: SchemaData):
+        """Determina el tipo de web basado en los schemas encontrados."""
+        types_lower = [t.lower() for t in schema.types]
+        
+        # Es ecommerce si tiene productos o es una tienda
+        if schema.has_products or schema.has_offers:
+            schema.is_ecommerce = True
+        
+        if any(t in types_lower for t in ["store", "onlinestore", "shoppingcenter"]):
+            schema.is_ecommerce = True
+        
+        # Es servicio si tiene servicios o es negocio local de servicios
+        if schema.has_services:
+            schema.is_service_business = True
+        
+        # Es blog si tiene artículos
+        if any(t in types_lower for t in ["article", "newsarticle", "blogposting", "blog"]):
+            schema.is_blog = True
+    
+    def _score_from_schema(self, schema: SchemaData, analysis: PromptAnalysis) -> float:
+        """
+        Calcula score adicional basado en datos de Schema.org.
+        Retorna puntos a añadir/restar del score.
+        """
+        score = 0.0
+        bt = analysis.business_type.lower()
+        
+        # === ECOMMERCE ===
+        if bt in ["ecommerce", "tienda", "shop", "marketplace"]:
+            if schema.is_ecommerce:
+                score += 20
+            if schema.has_products:
+                score += 15
+                if schema.product_count >= 3:
+                    score += 5  # Tiene varios productos
+            if schema.has_offers:
+                score += 10
+            if schema.price_range:
+                score += 5  # Tiene precios
+            if schema.is_blog and not schema.has_products:
+                score -= 15  # Es más blog que tienda
+        
+        # === SAAS / SOFTWARE ===
+        elif bt in ["saas", "software", "plataforma", "app"]:
+            if schema.is_software:
+                score += 25
+            if "softwareapplication" in [t.lower() for t in schema.types]:
+                score += 15
+            if schema.has_reviews:
+                score += 5
+        
+        # === AGENCIA / SERVICIOS ===
+        elif bt in ["agencia", "agency", "consultora", "servicios"]:
+            if schema.is_service_business:
+                score += 20
+            if schema.has_services:
+                score += 15
+            if schema.is_local_business:
+                score += 10
+            if "organization" in [t.lower() for t in schema.types]:
+                score += 5
+        
+        # === NEGOCIO LOCAL ===
+        elif bt in ["local", "negocio local"]:
+            if schema.is_local_business:
+                score += 25
+            if schema.address:
+                score += 10
+        
+        # === BLOG ===
+        elif bt == "blog":
+            if schema.is_blog:
+                score += 25
+        
+        # Bonus por tener reviews (indica negocio real)
+        if schema.has_reviews and schema.aggregate_rating:
+            score += 5
+        
+        # Bonus por nombre de organización (indica negocio real)
+        if schema.organization_name:
+            score += 5
+        
+        return score
     
     def _score_ecommerce(self, html: str, base_score: float) -> float:
         """Scoring específico para ecommerce."""

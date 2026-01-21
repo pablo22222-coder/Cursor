@@ -105,14 +105,28 @@ def create_app():
                     try:
                         result = validator.validate(sr, analysis)
                         if result.is_valid and result.confidence_score >= min_confidence:
+                            # Extraer info de schema si existe
+                            schema_info = {}
+                            if result.schema_data:
+                                schema_info = {
+                                    "types": result.schema_data.get("types", [])[:3],
+                                    "is_ecommerce": result.schema_data.get("is_ecommerce", False),
+                                    "is_service": result.schema_data.get("is_service_business", False),
+                                    "has_products": result.schema_data.get("has_products", False),
+                                    "product_count": result.schema_data.get("product_count", 0),
+                                    "has_reviews": result.schema_data.get("has_reviews", False),
+                                    "rating": result.schema_data.get("aggregate_rating")
+                                }
+                            
                             validated.append({
                                 "domain": result.domain,
                                 "url": result.url,
                                 "confidence": round(result.confidence_score, 1),
                                 "title": result.page_title[:60] + "..." if len(result.page_title) > 60 else result.page_title,
-                                "reasons": result.validation_reasons[:2],
+                                "reasons": result.validation_reasons[:3],
                                 "tech": result.tech_profile.get("ecommerce_platform", []) if result.tech_profile else [],
-                                "is_ecommerce": result.tech_profile.get("is_ecommerce", False) if result.tech_profile else False
+                                "is_ecommerce": result.tech_profile.get("is_ecommerce", False) if result.tech_profile else False,
+                                "schema": schema_info
                             })
                             
                             if len(validated) >= max_results:
