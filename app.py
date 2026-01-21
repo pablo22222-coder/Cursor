@@ -118,35 +118,22 @@ st.markdown("---")
 
 # Ejecutar búsqueda
 if search_button and prompt:
-    # Mostrar análisis del prompt
-    with st.expander("📊 Análisis del Prompt", expanded=True):
+    # Mostrar interpretación del prompt (simplificado)
+    with st.expander("🔍 Interpretación del Prompt", expanded=True):
         analyzer = PromptAnalyzer()
         intent = analyzer.analyze(prompt)
         
-        # Mostrar prompt limpio si es diferente
-        if intent.cleaned_prompt != intent.original_prompt.lower():
-            st.info(f"🧹 **Prompt limpio:** {intent.cleaned_prompt}")
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("Tipo de Negocio", intent.business_type.value.upper())
-        with col2:
-            st.metric("Nicho", intent.niche or "No detectado")
-        with col3:
-            st.metric("Producto/Servicio", intent.product_service or "No detectado")
-        with col4:
-            st.metric("Confianza", f"{intent.confidence}%")
+        # Mostrar prompt interpretado
+        st.markdown(f"**Tu búsqueda:** {intent.cleaned_prompt}")
         
         # Mostrar exclusiones y requisitos si existen
         if intent.exclusions or intent.requirements:
-            col1, col2 = st.columns(2)
-            with col1:
-                if intent.exclusions:
-                    st.warning(f"❌ **Excluir:** {', '.join(intent.exclusions)}")
-            with col2:
-                if intent.requirements:
-                    st.success(f"✅ **Requiere:** {', '.join(intent.requirements)}")
+            filters = []
+            if intent.requirements:
+                filters.append(f"✅ Con: {', '.join(intent.requirements)}")
+            if intent.exclusions:
+                filters.append(f"❌ Sin: {', '.join(intent.exclusions)}")
+            st.markdown(" · ".join(filters))
     
     # Buscar dominios
     with st.spinner("🔍 Buscando dominios..."):
