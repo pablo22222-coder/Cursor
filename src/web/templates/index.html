@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Domain Finder</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        primary: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            200: '#bae6fd',
+                            300: '#7dd3fc',
+                            400: '#38bdf8',
+                            500: '#0ea5e9',
+                            600: '#0284c7',
+                            700: '#0369a1',
+                            800: '#075985',
+                            900: '#0c4a6e',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .glass {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+        }
+        .result-card {
+            transition: all 0.2s ease;
+        }
+        .result-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+        }
+        .pulse-dot {
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .fade-in {
+            animation: fadeIn 0.3s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .skeleton {
+            background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.5s infinite;
+        }
+        @keyframes shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+    </style>
+</head>
+<body class="min-h-screen bg-gray-50 font-sans">
+    <!-- Header -->
+    <header class="gradient-bg text-white">
+        <div class="max-w-6xl mx-auto px-6 py-8">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h1 class="text-3xl font-bold tracking-tight">Domain Finder</h1>
+                    <p class="text-white/80 mt-1">Encuentra webs que sean lo que buscas</p>
+                </div>
+                <div class="flex items-center space-x-2 text-sm text-white/70">
+                    <span class="w-2 h-2 bg-green-400 rounded-full pulse-dot"></span>
+                    <span>Conectado</span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="max-w-6xl mx-auto px-6 -mt-6">
+        <!-- Search Card -->
+        <div class="glass rounded-2xl shadow-xl p-8 mb-8">
+            <div class="space-y-6">
+                <!-- Search Input -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        ¿Qué tipo de webs buscas?
+                    </label>
+                    <div class="relative">
+                        <input 
+                            type="text" 
+                            id="prompt-input"
+                            placeholder="Ej: ecommerce de cosmética natural, agencia de marketing digital en Madrid..."
+                            class="w-full px-5 py-4 text-lg border-2 border-gray-200 rounded-xl focus:border-primary-500 focus:ring-0 outline-none transition-colors"
+                        >
+                        <div id="analysis-badge" class="hidden absolute right-4 top-1/2 -translate-y-1/2">
+                            <span class="px-3 py-1 bg-primary-100 text-primary-700 rounded-full text-sm font-medium"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Analysis Preview -->
+                <div id="analysis-preview" class="hidden bg-gray-50 rounded-xl p-4 space-y-2">
+                    <div class="text-sm font-medium text-gray-500">Análisis del prompt:</div>
+                    <div class="flex flex-wrap gap-2" id="analysis-tags"></div>
+                </div>
+
+                <!-- Options -->
+                <div class="flex flex-wrap items-center gap-6">
+                    <div class="flex items-center gap-3">
+                        <label class="text-sm text-gray-600">Resultados:</label>
+                        <select id="max-results" class="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:border-primary-500 outline-none">
+                            <option value="10">10</option>
+                            <option value="20" selected>20</option>
+                            <option value="30">30</option>
+                            <option value="50">50</option>
+                        </select>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <label class="text-sm text-gray-600">Confianza mínima:</label>
+                        <select id="min-confidence" class="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:border-primary-500 outline-none">
+                            <option value="40">40%</option>
+                            <option value="50" selected>50%</option>
+                            <option value="60">60%</option>
+                            <option value="70">70%</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Search Button -->
+                <button 
+                    id="search-btn"
+                    onclick="startSearch()"
+                    class="w-full py-4 bg-gradient-to-r from-primary-600 to-primary-700 text-white font-semibold rounded-xl hover:from-primary-700 hover:to-primary-800 transition-all shadow-lg shadow-primary-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    <span id="btn-text">Buscar dominios</span>
+                    <span id="btn-loading" class="hidden">
+                        <svg class="animate-spin inline w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Buscando...
+                    </span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Progress Bar -->
+        <div id="progress-section" class="hidden mb-8">
+            <div class="glass rounded-xl p-6">
+                <div class="flex items-center justify-between mb-3">
+                    <span id="progress-status" class="text-sm font-medium text-gray-700">Iniciando...</span>
+                    <span id="progress-percent" class="text-sm font-semibold text-primary-600">0%</span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-2">
+                    <div id="progress-bar" class="bg-gradient-to-r from-primary-500 to-primary-600 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Section -->
+        <div id="results-section" class="hidden mb-12">
+            <!-- Results Header -->
+            <div class="flex items-center justify-between mb-6">
+                <div>
+                    <h2 class="text-xl font-semibold text-gray-900">Resultados</h2>
+                    <p id="results-count" class="text-sm text-gray-500">0 dominios encontrados</p>
+                </div>
+                <div class="flex gap-3">
+                    <button onclick="exportResults('json')" class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+                        Exportar JSON
+                    </button>
+                    <button onclick="exportResults('csv')" class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+                        Exportar CSV
+                    </button>
+                </div>
+            </div>
+
+            <!-- Analysis Summary -->
+            <div id="analysis-summary" class="hidden glass rounded-xl p-5 mb-6">
+                <div class="flex items-start gap-4">
+                    <div class="w-10 h-10 bg-primary-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                        <svg class="w-5 h-5 text-primary-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="font-medium text-gray-900 mb-1">Análisis del prompt</h3>
+                        <div class="flex flex-wrap gap-2" id="summary-tags"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Results Grid -->
+            <div id="results-grid" class="grid gap-4">
+                <!-- Results will be inserted here -->
+            </div>
+        </div>
+
+        <!-- Empty State -->
+        <div id="empty-state" class="text-center py-16">
+            <div class="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg class="w-10 h-10 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                </svg>
+            </div>
+            <h3 class="text-lg font-medium text-gray-900 mb-2">Empieza una búsqueda</h3>
+            <p class="text-gray-500 max-w-md mx-auto">
+                Describe qué tipo de webs buscas y encontraremos dominios que cumplan con tus criterios.
+            </p>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="max-w-6xl mx-auto px-6 py-8 text-center text-sm text-gray-400">
+        Domain Finder v1.0 — Búsqueda inteligente de dominios
+    </footer>
+
+    <script>
+        let pollingInterval = null;
+
+        // Analizar prompt mientras escribe
+        const promptInput = document.getElementById('prompt-input');
+        let analyzeTimeout = null;
+        
+        promptInput.addEventListener('input', function() {
+            clearTimeout(analyzeTimeout);
+            const value = this.value.trim();
+            
+            if (value.length > 5) {
+                analyzeTimeout = setTimeout(() => analyzePrompt(value), 500);
+            } else {
+                hideAnalysisPreview();
+            }
+        });
+
+        promptInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                startSearch();
+            }
+        });
+
+        async function analyzePrompt(prompt) {
+            try {
+                const response = await fetch('/api/analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt })
+                });
+                const data = await response.json();
+                showAnalysisPreview(data);
+            } catch (e) {
+                console.error('Error analyzing prompt:', e);
+            }
+        }
+
+        function showAnalysisPreview(analysis) {
+            const preview = document.getElementById('analysis-preview');
+            const tags = document.getElementById('analysis-tags');
+            const badge = document.getElementById('analysis-badge');
+            
+            tags.innerHTML = '';
+            
+            const items = [
+                { label: 'Tipo', value: analysis.business_type, color: 'bg-blue-100 text-blue-700' },
+                { label: 'Producto', value: analysis.product_category, color: 'bg-green-100 text-green-700' },
+                { label: 'Servicio', value: analysis.service_type, color: 'bg-purple-100 text-purple-700' },
+                { label: 'Industria', value: analysis.industry, color: 'bg-orange-100 text-orange-700' },
+                { label: 'Nicho', value: analysis.niche, color: 'bg-pink-100 text-pink-700' },
+                { label: 'Ubicación', value: analysis.location, color: 'bg-yellow-100 text-yellow-700' },
+                { label: 'Audiencia', value: analysis.target_audience, color: 'bg-indigo-100 text-indigo-700' },
+            ];
+            
+            items.forEach(item => {
+                if (item.value) {
+                    const tag = document.createElement('span');
+                    tag.className = `px-3 py-1 rounded-full text-sm font-medium ${item.color}`;
+                    tag.textContent = `${item.label}: ${item.value}`;
+                    tags.appendChild(tag);
+                }
+            });
+            
+            if (tags.children.length > 0) {
+                preview.classList.remove('hidden');
+                badge.classList.remove('hidden');
+                badge.querySelector('span').textContent = analysis.business_type;
+            }
+        }
+
+        function hideAnalysisPreview() {
+            document.getElementById('analysis-preview').classList.add('hidden');
+            document.getElementById('analysis-badge').classList.add('hidden');
+        }
+
+        async function startSearch() {
+            const prompt = document.getElementById('prompt-input').value.trim();
+            if (!prompt) {
+                alert('Por favor, escribe qué tipo de webs buscas');
+                return;
+            }
+
+            const maxResults = parseInt(document.getElementById('max-results').value);
+            const minConfidence = parseInt(document.getElementById('min-confidence').value);
+
+            // UI Updates
+            document.getElementById('search-btn').disabled = true;
+            document.getElementById('btn-text').classList.add('hidden');
+            document.getElementById('btn-loading').classList.remove('hidden');
+            document.getElementById('empty-state').classList.add('hidden');
+            document.getElementById('progress-section').classList.remove('hidden');
+            document.getElementById('results-section').classList.add('hidden');
+
+            try {
+                const response = await fetch('/api/search', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt, max_results: maxResults, min_confidence: minConfidence })
+                });
+
+                if (response.ok) {
+                    startPolling();
+                } else {
+                    const error = await response.json();
+                    alert(error.error || 'Error al iniciar búsqueda');
+                    resetUI();
+                }
+            } catch (e) {
+                alert('Error de conexión');
+                resetUI();
+            }
+        }
+
+        function startPolling() {
+            pollingInterval = setInterval(async () => {
+                try {
+                    const response = await fetch('/api/status');
+                    const status = await response.json();
+
+                    // Update progress
+                    document.getElementById('progress-bar').style.width = status.progress + '%';
+                    document.getElementById('progress-percent').textContent = status.progress + '%';
+                    document.getElementById('progress-status').textContent = status.status;
+
+                    if (!status.is_searching && status.progress >= 100) {
+                        stopPolling();
+                        await loadResults();
+                        resetUI();
+                    }
+                } catch (e) {
+                    console.error('Polling error:', e);
+                }
+            }, 500);
+        }
+
+        function stopPolling() {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+            }
+        }
+
+        async function loadResults() {
+            try {
+                const response = await fetch('/api/results');
+                const data = await response.json();
+
+                if (data.results && data.results.length > 0) {
+                    displayResults(data.results, data.analysis);
+                } else {
+                    document.getElementById('progress-section').classList.add('hidden');
+                    document.getElementById('empty-state').classList.remove('hidden');
+                }
+            } catch (e) {
+                console.error('Error loading results:', e);
+            }
+        }
+
+        function displayResults(results, analysis) {
+            document.getElementById('progress-section').classList.add('hidden');
+            document.getElementById('results-section').classList.remove('hidden');
+            document.getElementById('results-count').textContent = `${results.length} dominios encontrados`;
+
+            // Show analysis summary
+            if (analysis) {
+                const summary = document.getElementById('analysis-summary');
+                const tags = document.getElementById('summary-tags');
+                tags.innerHTML = '';
+
+                if (analysis.business_type) {
+                    tags.innerHTML += `<span class="px-2 py-1 bg-primary-100 text-primary-700 rounded text-sm">${analysis.business_type}</span>`;
+                }
+                if (analysis.product_category) {
+                    tags.innerHTML += `<span class="px-2 py-1 bg-green-100 text-green-700 rounded text-sm">${analysis.product_category}</span>`;
+                }
+                if (analysis.niche) {
+                    tags.innerHTML += `<span class="px-2 py-1 bg-pink-100 text-pink-700 rounded text-sm">${analysis.niche}</span>`;
+                }
+                if (analysis.queries_count) {
+                    tags.innerHTML += `<span class="px-2 py-1 bg-gray-100 text-gray-600 rounded text-sm">${analysis.queries_count} queries</span>`;
+                }
+
+                summary.classList.remove('hidden');
+            }
+
+            // Display results
+            const grid = document.getElementById('results-grid');
+            grid.innerHTML = '';
+
+            results.forEach((result, index) => {
+                const card = document.createElement('div');
+                card.className = 'result-card glass rounded-xl p-5 fade-in';
+                card.style.animationDelay = `${index * 0.05}s`;
+
+                const confidenceColor = result.confidence >= 80 ? 'text-green-600 bg-green-50' : 
+                                       result.confidence >= 60 ? 'text-yellow-600 bg-yellow-50' : 
+                                       'text-gray-600 bg-gray-50';
+
+                const techBadges = result.tech && result.tech.length > 0 
+                    ? result.tech.map(t => `<span class="px-2 py-0.5 bg-purple-100 text-purple-600 rounded text-xs">${t}</span>`).join('')
+                    : '';
+
+                const ecommerceBadge = result.is_ecommerce 
+                    ? '<span class="px-2 py-0.5 bg-blue-100 text-blue-600 rounded text-xs">Ecommerce</span>' 
+                    : '';
+
+                card.innerHTML = `
+                    <div class="flex items-start justify-between gap-4">
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2 mb-1">
+                                <h3 class="font-semibold text-gray-900 truncate">${result.domain}</h3>
+                                ${ecommerceBadge}
+                                ${techBadges}
+                            </div>
+                            <p class="text-sm text-gray-500 truncate mb-2">${result.title || result.url}</p>
+                            <div class="flex flex-wrap gap-1">
+                                ${result.reasons ? result.reasons.map(r => `<span class="text-xs text-gray-400">${r}</span>`).join(' · ') : ''}
+                            </div>
+                        </div>
+                        <div class="flex flex-col items-end gap-2">
+                            <span class="px-3 py-1 rounded-full text-sm font-semibold ${confidenceColor}">
+                                ${result.confidence}%
+                            </span>
+                            <a href="${result.url}" target="_blank" class="text-primary-600 hover:text-primary-700 text-sm font-medium">
+                                Visitar →
+                            </a>
+                        </div>
+                    </div>
+                `;
+                grid.appendChild(card);
+            });
+        }
+
+        function resetUI() {
+            document.getElementById('search-btn').disabled = false;
+            document.getElementById('btn-text').classList.remove('hidden');
+            document.getElementById('btn-loading').classList.add('hidden');
+        }
+
+        function exportResults(format) {
+            window.location.href = `/api/export/${format}`;
+        }
+    </script>
+</body>
+</html>
