@@ -27,7 +27,7 @@ class Settings:
     pagespeed_base_url: str = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed"
     
     # Gemini Config
-    gemini_model: str = "gemini-1.5-flash"
+    gemini_model: str = "gemini-2.0-flash"
     
     # Validación Config
     max_domains_to_validate: int = 50
