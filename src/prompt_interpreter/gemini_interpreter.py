@@ -9,6 +9,7 @@ from typing import List, Optional, Dict, Any
 import google.generativeai as genai
 
 from config.settings import get_settings
+from src.prompt_interpreter.query_generator import QueryGenerator
 
 
 @dataclass
@@ -171,34 +172,109 @@ Responde SOLO con el JSON, sin texto adicional ni markdown."""
             raise ValueError(f"No se pudo parsear la respuesta de Gemini: {response_text[:500]}")
     
     def _basic_analysis(self, prompt: str) -> PromptAnalysis:
-        """Análisis básico de fallback si Gemini falla."""
+        """Análisis básico de fallback si Gemini falla. Usa QueryGenerator para queries inteligentes."""
         prompt_lower = prompt.lower()
         
-        # Detectar tipo de negocio básico
+        # Detectar tipo de negocio
         business_type = "web"
-        if any(word in prompt_lower for word in ["ecommerce", "tienda", "shop", "store", "comprar"]):
+        product_category = None
+        service_type = None
+        niche = None
+        
+        # Detectar tipo de negocio
+        if any(word in prompt_lower for word in ["ecommerce", "tienda", "shop", "store", "comprar", "venta"]):
             business_type = "ecommerce"
-        elif any(word in prompt_lower for word in ["saas", "software", "app", "plataforma", "tool"]):
+        elif any(word in prompt_lower for word in ["saas", "software", "app", "plataforma", "tool", "herramienta"]):
             business_type = "saas"
-        elif any(word in prompt_lower for word in ["agencia", "agency", "servicios", "consultora"]):
+        elif any(word in prompt_lower for word in ["agencia", "agency", "servicios", "consultora", "consultoría"]):
             business_type = "agencia"
         elif any(word in prompt_lower for word in ["blog", "revista", "magazine", "noticias"]):
             business_type = "blog"
         
-        # Queries básicas
-        search_queries = [
-            f"{prompt}",
-            f"{prompt} españa",
-            f"{prompt} online",
-            f"mejores {prompt}",
-            f"{prompt} 2024"
+        # Extraer categoría/servicio del prompt
+        # Buscar patrones como "ecommerce de X", "tienda de X", "agencia de X"
+        patterns = [
+            r"(?:ecommerce|tienda|shop|store|venta)\s+(?:de\s+)?(.+?)(?:\s+online|\s+en\s+|\s*$)",
+            r"(?:agencia|agency|consultor[aí]a?)\s+(?:de\s+)?(.+?)(?:\s+en\s+|\s*$)",
+            r"(?:saas|software|plataforma|app|herramienta)\s+(?:de|para)\s+(.+?)(?:\s+online|\s*$)",
         ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, prompt_lower)
+            if match:
+                extracted = match.group(1).strip()
+                if business_type == "ecommerce":
+                    product_category = extracted
+                else:
+                    service_type = extracted
+                break
+        
+        # Detectar nicho
+        niche_keywords = {
+            "luxury": ["lujo", "premium", "exclusivo", "luxury"],
+            "eco": ["ecológico", "natural", "orgánico", "eco", "sostenible"],
+            "vintage": ["vintage", "retro", "antiguo", "second hand"],
+            "budget": ["barato", "económico", "low cost"],
+            "old money": ["old money", "clásico", "elegante"],
+        }
+        
+        for niche_name, keywords in niche_keywords.items():
+            if any(kw in prompt_lower for kw in keywords):
+                niche = niche_name
+                break
+        
+        # Usar QueryGenerator para queries inteligentes
+        query_gen = QueryGenerator()
+        search_queries = query_gen.generate_queries(
+            business_type=business_type,
+            main_term=product_category or service_type or prompt,
+            product_category=product_category,
+            service_type=service_type,
+            niche=niche,
+            max_queries=15
+        )
+        
+        # Indicadores de validación según tipo de negocio
+        if business_type == "ecommerce":
+            validation_indicators = [
+                "añadir al carrito", "add to cart", "comprar", "buy now",
+                "precio", "price", "€", "$", "envío", "shipping",
+                "carrito", "cart", "checkout", "pagar"
+            ]
+            exclusion_indicators = [
+                "qué es", "definición", "cómo crear", "tutorial",
+                "wikipedia", "guía", "artículo", "blog post"
+            ]
+        elif business_type == "saas":
+            validation_indicators = [
+                "pricing", "precios", "planes", "free trial", "prueba gratis",
+                "registrarse", "sign up", "login", "dashboard", "features"
+            ]
+            exclusion_indicators = [
+                "qué es", "definición", "alternativas", "review",
+                "comparativa", "wikipedia", "blog"
+            ]
+        elif business_type == "agencia":
+            validation_indicators = [
+                "nuestros servicios", "portfolio", "casos de éxito",
+                "clientes", "equipo", "contacto", "presupuesto", "about us"
+            ]
+            exclusion_indicators = [
+                "cómo montar", "qué es", "definición", "curso",
+                "wikipedia", "guía para crear"
+            ]
+        else:
+            validation_indicators = ["contacto", "servicios", "productos", "sobre nosotros"]
+            exclusion_indicators = ["wikipedia", "qué es", "definición", "guía"]
         
         return PromptAnalysis(
             business_type=business_type,
+            product_category=product_category,
+            service_type=service_type,
+            niche=niche,
             search_queries=search_queries,
-            validation_indicators=["contacto", "servicios", "productos", "comprar"],
-            exclusion_indicators=["wikipedia", "qué es", "definición", "guía"],
+            validation_indicators=validation_indicators,
+            exclusion_indicators=exclusion_indicators,
             original_prompt=prompt
         )
     
