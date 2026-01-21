@@ -32,15 +32,21 @@ class QueryGenerator:
     
     def generate_queries(self, intent: PromptIntent) -> List[str]:
         """
-        Genera queries optimizadas basadas en la intención del usuario.
+        Genera queries TRANSACCIONALES optimizadas.
+        
+        CLAVE: Generar queries que un COMPRADOR/CLIENTE usaría,
+        no queries que un investigador usaría.
         
         Args:
             intent: La intención analizada del prompt
             
         Returns:
-            Lista de queries de búsqueda
+            Lista de queries de búsqueda transaccionales
         """
         queries = []
+        
+        # Obtener término principal del prompt limpio
+        main_term = self._extract_main_term(intent)
         
         if intent.business_type == BusinessType.ECOMMERCE:
             queries.extend(self._generate_ecommerce_queries(intent))
@@ -53,6 +59,9 @@ class QueryGenerator:
         else:
             queries.extend(self._generate_generic_queries(intent))
         
+        # Añadir queries transaccionales directas basadas en el prompt
+        queries.extend(self._generate_transactional_queries(intent, main_term))
+        
         # Eliminar duplicados manteniendo orden
         seen = set()
         unique = []
@@ -62,38 +71,70 @@ class QueryGenerator:
                 seen.add(q_lower)
                 unique.append(q)
         
-        return unique[:8]  # Más queries para mejores resultados
+        return unique[:10]
+    
+    def _extract_main_term(self, intent: PromptIntent) -> str:
+        """Extrae el término principal del prompt."""
+        # Usar producto/servicio si existe
+        if intent.product_service:
+            return intent.product_service
+        # Usar nicho si existe
+        if intent.niche:
+            return intent.niche
+        # Usar el prompt limpio
+        return intent.cleaned_prompt
+    
+    def _generate_transactional_queries(self, intent: PromptIntent, main_term: str) -> List[str]:
+        """
+        Genera queries puramente transaccionales.
+        
+        Estas queries son las que un comprador real usaría.
+        """
+        queries = []
+        
+        if not main_term:
+            return queries
+        
+        # Queries transaccionales universales
+        queries.append(f"comprar {main_term}")
+        queries.append(f"{main_term} tienda")
+        queries.append(f"{main_term} precio")
+        queries.append(f"{main_term} online")
+        
+        # Queries en plataformas de ecommerce (garantiza tiendas reales)
+        queries.append(f"site:myshopify.com {main_term}")
+        
+        return queries
     
     def _generate_ecommerce_queries(self, intent: PromptIntent) -> List[str]:
         """
         Genera queries para encontrar tiendas online REALES.
         
         Estrategia: Usar términos que un COMPRADOR usaría, no un investigador.
+        EXCLUIR: artículos, guías, definiciones, cursos
         """
         queries = []
         
         niche = intent.niche or ""
         product = intent.product_service or ""
-        
-        # Término principal (producto o nicho)
         main_term = product or niche or "productos"
         
-        # 1. QUERIES TRANSACCIONALES (como buscaría un comprador)
-        queries.append(f"comprar {main_term} online")
-        queries.append(f"{main_term} tienda online")
-        queries.append(f"tienda {main_term} envío españa")
+        # 1. QUERIES TRANSACCIONALES DIRECTAS (intención de compra)
+        queries.append(f"comprar {main_term}")
+        queries.append(f"{main_term} envío gratis")
+        queries.append(f"{main_term} ofertas descuentos")
         
-        # 2. QUERIES CON SEÑALES DE TIENDA REAL
-        queries.append(f"{main_term} añadir carrito")
-        queries.append(f"{main_term} precio oferta")
+        # 2. QUERIES QUE ENCUENTRAN LISTADOS DE TIENDAS
+        queries.append(f"mejores tiendas {main_term} españa")
+        queries.append(f"tiendas online {main_term} 2024")
         
-        # 3. QUERIES DE DESCUBRIMIENTO
-        queries.append(f"mejores tiendas {main_term} online")
-        queries.append(f"donde comprar {main_term}")
+        # 3. QUERIES EN PLATAFORMAS DE ECOMMERCE (100% tiendas reales)
+        queries.append(f"site:myshopify.com {main_term}")
+        queries.append(f"site:tiendanube.com {main_term}")
         
-        # 4. QUERIES EN PLATAFORMAS ESPECÍFICAS (garantiza tiendas reales)
-        if niche or product:
-            queries.append(f"site:myshopify.com {main_term}")
+        # 4. QUERIES CON INDICADORES DE TIENDA
+        queries.append(f'"{main_term}" "añadir al carrito"')
+        queries.append(f'"{main_term}" "envío" "precio"')
         
         return queries
     
@@ -102,6 +143,7 @@ class QueryGenerator:
         Genera queries para encontrar productos SaaS REALES.
         
         Estrategia: Buscar páginas de pricing, signup, features.
+        EXCLUIR: artículos, comparativas genéricas
         """
         queries = []
         
@@ -109,13 +151,13 @@ class QueryGenerator:
         product = intent.product_service or ""
         main_term = product or niche or "software"
         
-        # Queries que encuentran SaaS reales (tienen pricing, trial, etc)
-        queries.append(f"{main_term} software pricing")
-        queries.append(f"{main_term} herramienta online gratis")
-        queries.append(f"mejor {main_term} software 2024")
-        queries.append(f"{main_term} app free trial")
-        queries.append(f"{main_term} plataforma registrarse")
-        queries.append(f"alternativas {main_term} software")
+        # Queries que encuentran SaaS reales
+        queries.append(f"{main_term} software precio planes")
+        queries.append(f"{main_term} herramienta gratis prueba")
+        queries.append(f"{main_term} app registrarse")
+        queries.append(f'"{main_term}" "pricing" "free trial"')
+        queries.append(f'"{main_term}" "sign up" "plans"')
+        queries.append(f"mejor software {main_term} empresas")
         
         return queries
     
@@ -124,6 +166,7 @@ class QueryGenerator:
         Genera queries para encontrar agencias REALES.
         
         Estrategia: Buscar páginas de servicios, portfolio, contacto.
+        EXCLUIR: artículos sobre cómo ser agencia
         """
         queries = []
         
@@ -131,13 +174,13 @@ class QueryGenerator:
         product = intent.product_service or niche
         
         # Queries que encuentran agencias reales
-        queries.append(f"agencia {product} españa")
-        queries.append(f"agencia {product} servicios precios")
-        queries.append(f"mejores agencias {product} españa")
-        queries.append(f"empresa {product} portfolio clientes")
-        queries.append(f"contratar agencia {product}")
-        queries.append(f"agencia {product} presupuesto")
-        queries.append(f"top agencias {product} madrid barcelona")
+        queries.append(f"agencia {product} contratar")
+        queries.append(f"agencia {product} presupuesto servicios")
+        queries.append(f"mejores agencias {product} españa 2024")
+        queries.append(f'agencia {product} "portfolio" "clientes"')
+        queries.append(f'agencia {product} "contacto" "servicios"')
+        queries.append(f"top 10 agencias {product} madrid")
+        queries.append(f"ranking agencias {product} barcelona")
         
         return queries
     
@@ -161,25 +204,26 @@ class QueryGenerator:
         """
         Genera queries cuando no se detecta tipo específico.
         
-        Intenta inferir la intención y buscar webs reales.
+        Estrategia: Asumir intención transaccional y buscar webs reales.
         """
         queries = []
-        prompt = intent.original_prompt.strip()
+        prompt = intent.cleaned_prompt or intent.original_prompt.strip()
         niche = intent.niche or ""
         product = intent.product_service or ""
         
-        # Si tiene nicho, probablemente busca tiendas o servicios
-        if niche or product:
-            term = product or niche
-            queries.append(f"comprar {term} online")
-            queries.append(f"{term} tienda")
-            queries.append(f"{term} empresa servicios")
-            queries.append(f"mejores {term} españa")
+        # Término principal
+        term = product or niche or prompt
         
-        # Queries basadas en el prompt original
-        queries.append(f"{prompt} online")
-        queries.append(f"mejores {prompt}")
-        queries.append(f"{prompt} españa")
+        # Queries transaccionales genéricas
+        queries.append(f"comprar {term}")
+        queries.append(f"{term} tienda online")
+        queries.append(f"{term} precio")
+        queries.append(f"mejores {term} españa 2024")
+        queries.append(f"{term} empresas servicios")
+        queries.append(f'"{term}" "contacto"')
+        
+        # Búsqueda en plataformas
+        queries.append(f"site:myshopify.com {term}")
         
         return queries
     
