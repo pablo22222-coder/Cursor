@@ -4,10 +4,23 @@ Analizador de prompts - Interpreta qué tipo de web busca el usuario.
 Este módulo es CRÍTICO para resolver el problema principal:
 - Distinguir entre "webs que hablen de X" vs "webs que SEAN X"
 - Extraer especificaciones del prompt (tipo de producto, nicho, etc.)
+
+SISTEMA DUAL:
+1. Embeddings (FastText + Sentence-Transformers) para tolerancia a errores
+2. Regex/patrones como fallback robusto
 """
 import re
 from typing import List, Tuple, Optional, Dict
 from ..models.domain import PromptIntent, BusinessType
+
+# Intentar cargar el motor de embeddings (opcional)
+try:
+    from ..nlp.embeddings import get_embedding_engine, EmbeddingEngine
+    from ..nlp.normalizer import AdvancedNormalizer
+    NLP_AVAILABLE = True
+except ImportError:
+    NLP_AVAILABLE = False
+    print("⚠ Módulo NLP no disponible, usando solo regex/patrones")
 
 
 class PromptNormalizer:
@@ -457,17 +470,38 @@ class PromptAnalyzer:
         'accesibilidad': [r'\baccesibilidad\b', r'\baccessibility\b'],
     }
     
-    def __init__(self):
-        """Inicializa el analizador de prompts."""
+    def __init__(self, use_embeddings: bool = True):
+        """
+        Inicializa el analizador de prompts.
+        
+        Args:
+            use_embeddings: Si usar el sistema de embeddings (más preciso pero más lento)
+        """
         self.cleaner = PromptCleaner()
         self.normalizer = PromptNormalizer()
+        
+        # Sistema de embeddings (opcional)
+        self.embedding_engine = None
+        self.advanced_normalizer = None
+        self._use_embeddings = use_embeddings and NLP_AVAILABLE
+        
+        if self._use_embeddings:
+            try:
+                # Cargar modelos de embeddings (puede tardar la primera vez)
+                self.embedding_engine = get_embedding_engine(load_models=True)
+                self.advanced_normalizer = AdvancedNormalizer()
+                print("✓ Sistema de embeddings activado")
+            except Exception as e:
+                print(f"⚠ No se pudo cargar embeddings: {e}")
+                self._use_embeddings = False
     
     def analyze(self, prompt: str) -> PromptIntent:
         """
         Analiza el prompt y extrae la intención del usuario.
         
-        FILOSOFÍA: Asumir errores humanos como norma.
-        "ecomerce de rropa" → se interpreta como "ecommerce de ropa"
+        SISTEMA DUAL:
+        1. Si hay embeddings: usa similitud semántica (tolera errores)
+        2. Fallback: usa regex/patrones (robusto)
         
         Args:
             prompt: El prompt del usuario (puede tener errores)
@@ -475,8 +509,17 @@ class PromptAnalyzer:
         Returns:
             PromptIntent con toda la información extraída
         """
-        # Limpiar el prompt de palabras innecesarias Y normalizar ortografía
-        cleaned_prompt, metadata = self.cleaner.clean(prompt)
+        # Normalización ligera (NFKC, lowercase, collapse spaces)
+        if self.advanced_normalizer:
+            cleaned_prompt, adv_metadata = self.advanced_normalizer.normalize(prompt)
+            requirements_data = self.advanced_normalizer.extract_requirements(cleaned_prompt)
+        else:
+            cleaned_prompt, metadata = self.cleaner.clean(prompt)
+            adv_metadata = metadata
+            requirements_data = {
+                "requirements": metadata.get("requirements", []),
+                "exclusions": metadata.get("exclusions", [])
+            }
         
         # Usar el prompt limpio y normalizado para el análisis
         prompt_lower = cleaned_prompt.lower().strip()
@@ -509,28 +552,60 @@ class PromptAnalyzer:
             metrics_to_analyze=metrics,
             original_prompt=prompt,
             cleaned_prompt=cleaned_prompt,
-            exclusions=metadata.get("exclusions", []),
-            requirements=metadata.get("requirements", []),
+            exclusions=requirements_data.get("exclusions", []),
+            requirements=requirements_data.get("requirements", []),
             search_queries=search_queries,
             confidence=business_confidence
         )
     
     def _detect_business_type(self, prompt: str) -> Tuple[BusinessType, int]:
-        """Detecta el tipo de negocio que busca el usuario."""
+        """
+        Detecta el tipo de negocio que busca el usuario.
+        
+        Usa embeddings si están disponibles, sino fallback a regex.
+        """
+        # 1. Intentar con embeddings (más tolerante a errores)
+        if self._use_embeddings and self.embedding_engine:
+            detected_type, confidence = self.embedding_engine.detect_business_type(prompt)
+            
+            if detected_type != "unknown" and confidence > 0.35:
+                # Mapear string a BusinessType
+                type_map = {
+                    "ecommerce": BusinessType.ECOMMERCE,
+                    "agency": BusinessType.AGENCY,
+                    "saas": BusinessType.SAAS,
+                    "dropshipping": BusinessType.DROPSHIPPING,
+                }
+                business_type = type_map.get(detected_type, BusinessType.UNKNOWN)
+                return business_type, int(confidence * 100)
+        
+        # 2. Fallback: usar patrones regex
         for business_type, patterns in self.BUSINESS_PATTERNS.items():
             for pattern in patterns:
                 if re.search(pattern, prompt, re.IGNORECASE):
-                    # Calcular confianza basada en la especificidad del patrón
                     confidence = 80 if len(pattern) > 10 else 60
                     return business_type, confidence
         
         return BusinessType.UNKNOWN, 30
     
     def _detect_niche(self, prompt: str) -> Optional[str]:
-        """Detecta el nicho o sector específico."""
+        """
+        Detecta el nicho o sector específico.
+        
+        Usa embeddings si están disponibles, sino fallback a regex.
+        """
+        # 1. Intentar con embeddings
+        if self._use_embeddings and self.embedding_engine:
+            detected_niche, confidence = self.embedding_engine.detect_niche(prompt)
+            
+            if detected_niche and confidence > 0.3:
+                return detected_niche
+        
+        # 2. Fallback: usar patrones regex
         for pattern, niche_name in self.NICHE_KEYWORDS:
             if re.search(pattern, prompt, re.IGNORECASE):
                 return niche_name
+        
         return None
     
     def _detect_product_service(
