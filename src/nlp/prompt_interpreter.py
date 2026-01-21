@@ -5,7 +5,7 @@ Módulo offline (sin APIs externas) que interpreta prompts en español
 (incluyendo faltas ortográficas) y produce una representación estructurada (Spec).
 
 Componentes:
-- Sentence-Transformers para embeddings de frase
+- Sentence-Transformers para embeddings de frase (carga diferida)
 - spaCy para NER y tokenización
 - RapidFuzz para fuzzy matching
 - Clasificación de intención por similitud coseno
@@ -15,26 +15,54 @@ import json
 import unicodedata
 from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Optional, Tuple, Any
-import numpy as np
 
-# Importaciones condicionales
+# Numpy con importación segura
 try:
-    from sentence_transformers import SentenceTransformer
-    SENTENCE_TRANSFORMERS_AVAILABLE = True
+    import numpy as np
+    NUMPY_AVAILABLE = True
 except ImportError:
-    SENTENCE_TRANSFORMERS_AVAILABLE = False
+    NUMPY_AVAILABLE = False
+    np = None
 
-try:
-    from rapidfuzz import fuzz, process
-    RAPIDFUZZ_AVAILABLE = True
-except ImportError:
-    RAPIDFUZZ_AVAILABLE = False
+# Flags para importaciones diferidas (lazy loading)
+SENTENCE_TRANSFORMERS_AVAILABLE = None  # Se determina al cargar
+RAPIDFUZZ_AVAILABLE = None
+SPACY_AVAILABLE = None
 
-try:
-    import spacy
-    SPACY_AVAILABLE = True
-except ImportError:
-    SPACY_AVAILABLE = False
+def _check_rapidfuzz():
+    """Verifica si rapidfuzz está disponible."""
+    global RAPIDFUZZ_AVAILABLE
+    if RAPIDFUZZ_AVAILABLE is None:
+        try:
+            from rapidfuzz import fuzz, process
+            RAPIDFUZZ_AVAILABLE = True
+        except ImportError:
+            RAPIDFUZZ_AVAILABLE = False
+    return RAPIDFUZZ_AVAILABLE
+
+def _check_spacy():
+    """Verifica si spacy está disponible."""
+    global SPACY_AVAILABLE
+    if SPACY_AVAILABLE is None:
+        try:
+            import spacy
+            SPACY_AVAILABLE = True
+        except ImportError:
+            SPACY_AVAILABLE = False
+    return SPACY_AVAILABLE
+
+def _check_sentence_transformers():
+    """Verifica si sentence_transformers está disponible."""
+    global SENTENCE_TRANSFORMERS_AVAILABLE
+    if SENTENCE_TRANSFORMERS_AVAILABLE is None:
+        try:
+            from sentence_transformers import SentenceTransformer
+            SENTENCE_TRANSFORMERS_AVAILABLE = True
+        except ImportError:
+            SENTENCE_TRANSFORMERS_AVAILABLE = False
+        except Exception:
+            SENTENCE_TRANSFORMERS_AVAILABLE = False
+    return SENTENCE_TRANSFORMERS_AVAILABLE
 
 
 @dataclass
@@ -153,12 +181,17 @@ class IntentClassifier:
         if not self.model:
             return
         
+        if not NUMPY_AVAILABLE:
+            return
+        
+        import numpy as np
+        
         for intent, phrases in self.INTENT_PROTOTYPES.items():
             embeddings = self.model.encode(phrases)
             # Promedio de embeddings como representación de la intención
             self._prototype_embeddings[intent] = np.mean(embeddings, axis=0)
     
-    def classify(self, embedding: np.ndarray) -> IntentResult:
+    def classify(self, embedding) -> IntentResult:
         """
         Clasifica la intención basándose en similitud con prototipos.
         
@@ -182,8 +215,13 @@ class IntentClassifier:
         
         return IntentResult(label=best_intent, confidence=float(best_score))
     
-    def _cosine_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
+    def _cosine_similarity(self, vec1, vec2) -> float:
         """Calcula similitud coseno entre dos vectores."""
+        if not NUMPY_AVAILABLE:
+            return 0.0
+        
+        import numpy as np
+        
         dot = np.dot(vec1, vec2)
         norm1 = np.linalg.norm(vec1)
         norm2 = np.linalg.norm(vec2)
@@ -369,7 +407,8 @@ class EntityExtractor:
                 # Limpiar y normalizar
                 item = match.strip().lower()
                 # Verificar si es una tecnología conocida
-                if RAPIDFUZZ_AVAILABLE:
+                if _check_rapidfuzz():
+                    from rapidfuzz import fuzz, process
                     result = process.extractOne(item, self.KNOWN_TECHNOLOGIES, scorer=fuzz.ratio)
                     if result and result[1] >= 80:
                         item = result[0]
@@ -386,7 +425,8 @@ class EntityExtractor:
             matches = re.findall(pattern, text, re.IGNORECASE)
             for match in matches:
                 item = match.strip().lower()
-                if RAPIDFUZZ_AVAILABLE:
+                if _check_rapidfuzz():
+                    from rapidfuzz import fuzz, process
                     result = process.extractOne(item, self.KNOWN_TECHNOLOGIES, scorer=fuzz.ratio)
                     if result and result[1] >= 80:
                         item = result[0]
@@ -425,7 +465,8 @@ class EntityExtractor:
         for tech in self.KNOWN_TECHNOLOGIES:
             if tech in text_lower:
                 found.append(tech)
-            elif RAPIDFUZZ_AVAILABLE:
+            elif _check_rapidfuzz():
+                from rapidfuzz import fuzz
                 # Buscar con fuzzy matching
                 words = text_lower.split()
                 for word in words:
@@ -480,8 +521,10 @@ class ConditionalCorrector:
         Returns:
             Tuple de (texto corregido, lista de correcciones aplicadas)
         """
-        if not RAPIDFUZZ_AVAILABLE:
+        if not _check_rapidfuzz():
             return text, []
+        
+        from rapidfuzz import fuzz, process
         
         corrections = []
         words = text.split()
@@ -545,30 +588,34 @@ class PromptInterpreter:
     
     def _load_models(self):
         """Carga los modelos necesarios."""
-        # Sentence-Transformers
-        if SENTENCE_TRANSFORMERS_AVAILABLE:
+        # Sentence-Transformers (importación diferida)
+        if _check_sentence_transformers():
             try:
+                from sentence_transformers import SentenceTransformer
                 self.sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
                 print("✓ Sentence-Transformers cargado")
             except Exception as e:
                 print(f"⚠ Error cargando Sentence-Transformers: {e}")
+                self.sentence_model = None
         
-        # spaCy (opcional)
-        if SPACY_AVAILABLE:
+        # spaCy (opcional, importación diferida)
+        if _check_spacy():
             try:
+                import spacy
                 self.nlp = spacy.load("es_core_news_sm")
                 print("✓ spaCy español cargado")
             except:
                 try:
+                    import spacy
                     self.nlp = spacy.load("en_core_web_sm")
                     print("✓ spaCy inglés cargado (español no disponible)")
                 except:
                     print("ℹ spaCy no disponible")
         
-        # Inicializar componentes
+        # Reinicializar componentes con modelos cargados
         self.intent_classifier = IntentClassifier(model=self.sentence_model)
         self.entity_extractor = EntityExtractor(nlp=self.nlp)
-        self.corrector = ConditionalCorrector(min_similarity=75.0)  # Más tolerante
+        self.corrector = ConditionalCorrector(min_similarity=75.0)
     
     def interpret(self, prompt: str) -> PromptSpec:
         """
@@ -644,7 +691,7 @@ class PromptInterpreter:
         normalized = re.sub(r'\s+', ' ', normalized).strip()
         return normalized
     
-    def _compute_embedding(self, text: str) -> Optional[np.ndarray]:
+    def _compute_embedding(self, text: str):
         """Calcula embedding del texto."""
         if not self.sentence_model:
             return None
