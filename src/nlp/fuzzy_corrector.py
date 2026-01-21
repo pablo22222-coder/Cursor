@@ -38,7 +38,7 @@ class FuzzyCorrector:
             "ecommerce", "e-commerce", "tienda", "shop", "store", "comercio",
             "tienda online", "tienda virtual", "comercio electronico",
             "saas", "software", "plataforma", "herramienta", "aplicacion", "app",
-            "agencia", "consultora", "consultoria", "estudio", "empresa",
+            "agencia", "agencias", "consultora", "consultoria", "estudio", "empresa",
             "dropshipping", "marketplace", "blog", "portfolio",
         ],
         
@@ -95,6 +95,7 @@ class FuzzyCorrector:
             "pequeño", "grande", "nuevo", "mejor", "top",
             "gratis", "premium", "profesional", "empresarial",
             "rapido", "facil", "simple", "completo", "avanzado",
+            "servicios", "portfolio", "proyectos", "clientes",
         ],
     }
     

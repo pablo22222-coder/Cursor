@@ -576,14 +576,22 @@ class PromptAnalyzer:
         """
         Detecta el tipo de negocio que busca el usuario.
         
-        Usa embeddings si están disponibles, sino fallback a regex.
+        PRIORIDAD: Regex primero (palabras clave explícitas), embeddings después.
+        Esto evita que "agencia de marketing" se detecte como "saas".
         """
-        # 1. Intentar con embeddings (más tolerante a errores)
+        # 1. PRIMERO: Buscar palabras clave explícitas con regex
+        # Esto tiene prioridad porque si el usuario dice "agencia", quiere agencia
+        for business_type, patterns in self.BUSINESS_PATTERNS.items():
+            for pattern in patterns:
+                if re.search(pattern, prompt, re.IGNORECASE):
+                    confidence = 85 if len(pattern) > 10 else 70
+                    return business_type, confidence
+        
+        # 2. SEGUNDO: Si no hay palabras clave claras, usar embeddings
         if self._use_embeddings and self.embedding_engine:
             detected_type, confidence = self.embedding_engine.detect_business_type(prompt)
             
-            if detected_type != "unknown" and confidence > 0.35:
-                # Mapear string a BusinessType
+            if detected_type != "unknown" and confidence > 0.4:
                 type_map = {
                     "ecommerce": BusinessType.ECOMMERCE,
                     "agency": BusinessType.AGENCY,
@@ -592,13 +600,6 @@ class PromptAnalyzer:
                 }
                 business_type = type_map.get(detected_type, BusinessType.UNKNOWN)
                 return business_type, int(confidence * 100)
-        
-        # 2. Fallback: usar patrones regex
-        for business_type, patterns in self.BUSINESS_PATTERNS.items():
-            for pattern in patterns:
-                if re.search(pattern, prompt, re.IGNORECASE):
-                    confidence = 80 if len(pattern) > 10 else 60
-                    return business_type, confidence
         
         return BusinessType.UNKNOWN, 30
     
