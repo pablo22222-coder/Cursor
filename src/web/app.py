@@ -35,7 +35,8 @@ from src.utils.helpers import export_to_json, export_to_csv
 # Timeout para fallback sin filtro de tecnología (segundos)
 TECHNOLOGY_FILTER_TIMEOUT = 180
 # Timeout para extracción de contactos con Katana (segundos)
-KATANA_TIMEOUT = 45
+KATANA_TIMEOUT = 30
+KATANA_HARD_TIMEOUT = 45
 
 
 def create_app():
@@ -289,10 +290,10 @@ def create_app():
                 
                 search_state["progress"] = 90
                 
-                # === FASE 3: Extraer datos de contacto con Katana (Optimizado) ===
+                # === FASE 3: Extraer datos de contacto con Katana (Ultra-Optimizado) ===
                 if extract_contacts and final_results:
                     search_state["status"] = "Fase 3: Extrayendo datos de contacto..."
-                    katana = KatanaExtractor(katana_timeout=KATANA_TIMEOUT, hard_timeout=60)
+                    katana = KatanaExtractor(katana_timeout=KATANA_TIMEOUT, hard_timeout=KATANA_HARD_TIMEOUT)
                     
                     total_contacts = len(final_results)
                     for i, domain_info in enumerate(final_results):
