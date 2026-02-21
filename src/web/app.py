@@ -2,9 +2,10 @@
 Interfaz web para Domain Finder.
 Servidor Flask con API REST y frontend moderno.
 
-Implementa validación en dos fases:
+Implementa validación en tres fases:
 1. Validación de tipo de web (metadata, HTML, Schema.org)
 2. Validación de tecnologías con Wappalyzergo
+3. Extracción de datos de contacto con Katana
 
 Si no hay resultados con tecnologías después de 180s, 
 devuelve los mejores resultados sin filtro de tecnología.
@@ -28,10 +29,13 @@ from src.prompt_interpreter.semantic_parser import SemanticParser, get_technolog
 from src.web_search.serper_search import SerperSearch
 from src.domain_validator.validator import DomainValidator
 from src.web_analyzer.wappalyzer_analyzer import WappalyzerAnalyzer
+from src.web_analyzer.katana_extractor import KatanaExtractor
 from src.utils.helpers import export_to_json, export_to_csv
 
 # Timeout para fallback sin filtro de tecnología (segundos)
 TECHNOLOGY_FILTER_TIMEOUT = 180
+# Timeout para extracción de contactos con Katana (segundos)
+KATANA_TIMEOUT = 45
 
 
 def create_app():
@@ -64,6 +68,8 @@ def create_app():
         data = request.json
         prompt = data.get('prompt', '').strip()
         max_results = data.get('max_results', 20)
+        extract_contacts = data.get('extract_contacts', True)
+        contact_fields = data.get('contact_fields', ['email', 'phone', 'social_media', 'title'])
         
         if not prompt:
             return jsonify({"error": "El prompt es requerido"}), 400
@@ -267,23 +273,86 @@ def create_app():
                         break
                 
                 # === Determinar resultados finales ===
+                final_results = []
                 if has_tech_filters:
                     if len(validated_with_tech) > 0:
-                        # Tenemos resultados con filtro de tecnología
                         validated_with_tech.sort(key=lambda x: x["confidence"], reverse=True)
-                        search_state["results"] = validated_with_tech[:max_results]
-                        search_state["status"] = f"✓ Completado: {len(search_state['results'])} dominios con tecnología requerida"
+                        final_results = validated_with_tech[:max_results]
+                        search_state["status"] = f"✓ {len(final_results)} dominios con tecnología requerida"
                     else:
-                        # No hay resultados con tech, usar fallback
                         validated_without_tech.sort(key=lambda x: x["confidence"], reverse=True)
-                        search_state["results"] = validated_without_tech[:max_results]
-                        search_state["status"] = f"⚠️ {len(search_state['results'])} dominios (sin filtro de tecnología)"
+                        final_results = validated_without_tech[:max_results]
+                        search_state["status"] = f"⚠️ {len(final_results)} dominios (sin filtro de tecnología)"
                 else:
-                    # No hay filtros de tecnología
                     validated_without_tech.sort(key=lambda x: x["confidence"], reverse=True)
-                    search_state["results"] = validated_without_tech[:max_results]
-                    search_state["status"] = f"✓ Completado: {len(search_state['results'])} dominios encontrados"
+                    final_results = validated_without_tech[:max_results]
+                    search_state["status"] = f"✓ {len(final_results)} dominios encontrados"
                 
+                search_state["progress"] = 90
+                
+                # === FASE 3: Extraer datos de contacto con Katana ===
+                if extract_contacts and final_results:
+                    search_state["status"] = "Fase 3: Extrayendo datos de contacto..."
+                    katana = KatanaExtractor(timeout=KATANA_TIMEOUT)
+                    
+                    total_contacts = len(final_results)
+                    for i, domain_info in enumerate(final_results):
+                        try:
+                            search_state["status"] = f"Fase 3: Extrayendo contactos {i+1}/{total_contacts}..."
+                            
+                            contact_data = katana.extract(
+                                domain_info["url"],
+                                fields=contact_fields
+                            )
+                            
+                            # Añadir datos de contacto al resultado
+                            domain_info["contact"] = {
+                                "email": contact_data.email,
+                                "phone": contact_data.phone,
+                                "title": contact_data.title,
+                                "linkedin": contact_data.linkedin,
+                                "instagram": contact_data.instagram,
+                                "twitter": contact_data.twitter,
+                                "facebook": contact_data.facebook,
+                                "youtube": contact_data.youtube,
+                                "tiktok": contact_data.tiktok,
+                                "social_media": contact_data.social_media,
+                                "extraction_success": contact_data.extraction_success,
+                                "partial_data": contact_data.partial_data
+                            }
+                            
+                            # Actualizar título si Katana encontró uno mejor
+                            if contact_data.title and (not domain_info.get("title") or len(contact_data.title) > len(domain_info.get("title", ""))):
+                                domain_info["title"] = contact_data.title
+                                
+                        except Exception as e:
+                            # Si falla, dejar el campo de contactos vacío
+                            domain_info["contact"] = {
+                                "email": None,
+                                "phone": None,
+                                "title": None,
+                                "linkedin": None,
+                                "instagram": None,
+                                "twitter": None,
+                                "facebook": None,
+                                "youtube": None,
+                                "tiktok": None,
+                                "social_media": [],
+                                "extraction_success": False,
+                                "partial_data": False,
+                                "error": str(e)
+                            }
+                        
+                        # Actualizar progreso
+                        progress = 90 + int((i / total_contacts) * 10)
+                        search_state["progress"] = min(progress, 99)
+                else:
+                    # Si no se extraen contactos, añadir estructura vacía
+                    for domain_info in final_results:
+                        domain_info["contact"] = None
+                
+                search_state["results"] = final_results
+                search_state["status"] = f"✓ Completado: {len(final_results)} dominios encontrados"
                 search_state["progress"] = 100
                 
             except Exception as e:
@@ -362,9 +431,32 @@ def create_app():
             import io
             output = io.StringIO()
             writer = csv.writer(output)
-            writer.writerow(['Dominio', 'URL', 'Confianza', 'Título'])
+            
+            # Headers con datos de contacto
+            headers = [
+                'Dominio', 'URL', 'Confianza', 'Título',
+                'Email', 'Teléfono', 
+                'LinkedIn', 'Instagram', 'Twitter', 'Facebook', 'YouTube', 'TikTok'
+            ]
+            writer.writerow(headers)
+            
             for r in search_state["results"]:
-                writer.writerow([r['domain'], r['url'], r['confidence'], r.get('title', '')])
+                contact = r.get('contact', {}) or {}
+                row = [
+                    r['domain'],
+                    r['url'],
+                    r['confidence'],
+                    r.get('title', ''),
+                    contact.get('email', '') or '',
+                    contact.get('phone', '') or '',
+                    contact.get('linkedin', '') or '',
+                    contact.get('instagram', '') or '',
+                    contact.get('twitter', '') or '',
+                    contact.get('facebook', '') or '',
+                    contact.get('youtube', '') or '',
+                    contact.get('tiktok', '') or ''
+                ]
+                writer.writerow(row)
             
             return Response(
                 output.getvalue(),
