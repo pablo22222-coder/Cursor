@@ -122,21 +122,12 @@
                 <!-- Options -->
                 <div class="flex flex-wrap items-center gap-6">
                     <div class="flex items-center gap-3">
-                        <label class="text-sm text-gray-600">Resultados:</label>
+                        <label class="text-sm text-gray-600">Número de resultados:</label>
                         <select id="max-results" class="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:border-primary-500 outline-none">
                             <option value="10">10</option>
                             <option value="20" selected>20</option>
                             <option value="30">30</option>
                             <option value="50">50</option>
-                        </select>
-                    </div>
-                    <div class="flex items-center gap-3">
-                        <label class="text-sm text-gray-600">Confianza mínima:</label>
-                        <select id="min-confidence" class="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:border-primary-500 outline-none">
-                            <option value="40">40%</option>
-                            <option value="50" selected>50%</option>
-                            <option value="60">60%</option>
-                            <option value="70">70%</option>
                         </select>
                     </div>
                 </div>
@@ -314,7 +305,6 @@
             }
 
             const maxResults = parseInt(document.getElementById('max-results').value);
-            const minConfidence = parseInt(document.getElementById('min-confidence').value);
 
             // UI Updates
             document.getElementById('search-btn').disabled = true;
@@ -328,7 +318,7 @@
                 const response = await fetch('/api/search', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ prompt, max_results: maxResults, min_confidence: minConfidence })
+                    body: JSON.stringify({ prompt, max_results: maxResults })
                 });
 
                 if (response.ok) {

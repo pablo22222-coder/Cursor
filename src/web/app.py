@@ -52,7 +52,6 @@ def create_app():
         data = request.json
         prompt = data.get('prompt', '').strip()
         max_results = data.get('max_results', 20)
-        min_confidence = data.get('min_confidence', 50)
         
         if not prompt:
             return jsonify({"error": "El prompt es requerido"}), 400
@@ -104,7 +103,8 @@ def create_app():
                 for i, sr in enumerate(search_results):
                     try:
                         result = validator.validate(sr, analysis)
-                        if result.is_valid and result.confidence_score >= min_confidence:
+                        # Validar todos los resultados (sin filtro de confianza mínima)
+                        if result.analysis_complete:
                             # Extraer info de schema si existe
                             schema_info = {}
                             if result.schema_data:
@@ -128,9 +128,6 @@ def create_app():
                                 "is_ecommerce": result.tech_profile.get("is_ecommerce", False) if result.tech_profile else False,
                                 "schema": schema_info
                             })
-                            
-                            if len(validated) >= max_results:
-                                break
                     except:
                         pass
                     
@@ -138,10 +135,11 @@ def create_app():
                     search_state["progress"] = min(progress, 95)
                     search_state["status"] = f"Validando... {i+1}/{total}"
                 
-                # Ordenar por confianza
+                # Ordenar por confianza (los más relevantes primero)
                 validated.sort(key=lambda x: x["confidence"], reverse=True)
+                # Devolver solo los N mejores resultados
                 search_state["results"] = validated[:max_results]
-                search_state["status"] = f"Completado: {len(validated)} dominios válidos"
+                search_state["status"] = f"Completado: {len(search_state['results'])} dominios encontrados"
                 search_state["progress"] = 100
                 
             except Exception as e:
