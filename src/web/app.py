@@ -1,6 +1,13 @@
 """
 Interfaz web para Domain Finder.
 Servidor Flask con API REST y frontend moderno.
+
+Implementa validación en dos fases:
+1. Validación de tipo de web (metadata, HTML, Schema.org)
+2. Validación de tecnologías con Wappalyzergo
+
+Si no hay resultados con tecnologías después de 180s, 
+devuelve los mejores resultados sin filtro de tecnología.
 """
 import sys
 import os
@@ -17,9 +24,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from src.prompt_interpreter.gemini_interpreter import GeminiInterpreter
 from src.prompt_interpreter.intent_detector import IntentDetector
 from src.prompt_interpreter.query_generator import QueryGenerator
+from src.prompt_interpreter.semantic_parser import SemanticParser, get_technology_requirements
 from src.web_search.serper_search import SerperSearch
 from src.domain_validator.validator import DomainValidator
+from src.web_analyzer.wappalyzer_analyzer import WappalyzerAnalyzer
 from src.utils.helpers import export_to_json, export_to_csv
+
+# Timeout para fallback sin filtro de tecnología (segundos)
+TECHNOLOGY_FILTER_TIMEOUT = 180
 
 
 def create_app():
@@ -64,12 +76,40 @@ def create_app():
             search_state["results"] = []
             
             try:
-                # 1. Analizar prompt
+                # 1. Analizar prompt con parser semántico
                 search_state["status"] = "Analizando prompt..."
+                search_state["progress"] = 5
+                
+                # Usar el parser semántico para obtener requisitos de tecnología
+                semantic_parser = SemanticParser()
+                parsed_prompt = semantic_parser.parse(prompt)
+                tech_requirements = get_technology_requirements(parsed_prompt)
+                
+                # Determinar si hay filtros de tecnología
+                has_tech_filters = bool(
+                    tech_requirements.get("must_have") or 
+                    tech_requirements.get("must_not") or
+                    tech_requirements.get("must_have_categories") or
+                    tech_requirements.get("must_not_categories")
+                )
+                
                 search_state["progress"] = 10
                 
+                # Usar el intérprete para el análisis completo
                 interpreter = GeminiInterpreter()
                 analysis = interpreter.analyze_prompt(prompt)
+                
+                # Añadir requisitos de tecnología al análisis
+                if tech_requirements.get("must_have") or tech_requirements.get("must_have_categories"):
+                    analysis.required_tools = (
+                        tech_requirements.get("must_have", []) + 
+                        tech_requirements.get("must_have_categories", [])
+                    )
+                if tech_requirements.get("must_not") or tech_requirements.get("must_not_categories"):
+                    analysis.excluded_tools = (
+                        tech_requirements.get("must_not", []) + 
+                        tech_requirements.get("must_not_categories", [])
+                    )
                 
                 search_state["analysis"] = {
                     "business_type": analysis.business_type,
@@ -77,7 +117,9 @@ def create_app():
                     "service_type": analysis.service_type,
                     "niche": analysis.niche,
                     "queries_count": len(analysis.search_queries),
-                    "queries": analysis.search_queries[:5]
+                    "queries": analysis.search_queries[:5],
+                    "tech_must_have": analysis.required_tools if hasattr(analysis, 'required_tools') else [],
+                    "tech_must_not": analysis.excluded_tools if hasattr(analysis, 'excluded_tools') else []
                 }
                 search_state["progress"] = 25
                 
@@ -85,7 +127,7 @@ def create_app():
                 search_state["status"] = "Buscando webs..."
                 searcher = SerperSearch()
                 search_results = searcher.search(analysis, max_results=max_results * 3)
-                search_state["progress"] = 50
+                search_state["progress"] = 45
                 search_state["status"] = f"Encontrados {len(search_results)} resultados"
                 
                 if not search_results:
@@ -94,52 +136,154 @@ def create_app():
                     search_state["is_searching"] = False
                     return
                 
-                # 3. Validar dominios
-                search_state["status"] = "Validando dominios..."
-                validator = DomainValidator(use_webtech=True, use_pagespeed=False)
+                # 3. Validación en dos fases
+                search_state["status"] = "Fase 1: Validando tipo de web..."
                 
-                validated = []
+                # Fase 1: Validar sin filtro de tecnología (solo tipo de web)
+                validator = DomainValidator(use_wappalyzer=False, use_pagespeed=False)
+                
+                # Dominios que pasan la primera fase
+                phase1_passed = []
                 total = len(search_results)
+                
                 for i, sr in enumerate(search_results):
                     try:
                         result = validator.validate(sr, analysis)
-                        # Validar todos los resultados (sin filtro de confianza mínima)
-                        if result.analysis_complete:
-                            # Extraer info de schema si existe
-                            schema_info = {}
-                            if result.schema_data:
-                                schema_info = {
-                                    "types": result.schema_data.get("types", [])[:3],
-                                    "is_ecommerce": result.schema_data.get("is_ecommerce", False),
-                                    "is_service": result.schema_data.get("is_service_business", False),
-                                    "has_products": result.schema_data.get("has_products", False),
-                                    "product_count": result.schema_data.get("product_count", 0),
-                                    "has_reviews": result.schema_data.get("has_reviews", False),
-                                    "rating": result.schema_data.get("aggregate_rating")
-                                }
-                            
-                            validated.append({
-                                "domain": result.domain,
-                                "url": result.url,
-                                "confidence": round(result.confidence_score, 1),
-                                "title": result.page_title[:60] + "..." if len(result.page_title) > 60 else result.page_title,
-                                "reasons": result.validation_reasons[:3],
-                                "tech": result.tech_profile.get("ecommerce_platform", []) if result.tech_profile else [],
-                                "is_ecommerce": result.tech_profile.get("is_ecommerce", False) if result.tech_profile else False,
-                                "schema": schema_info
+                        if result.analysis_complete and result.confidence_score >= 40:
+                            phase1_passed.append({
+                                "search_result": sr,
+                                "validation_result": result,
+                                "confidence": result.confidence_score
                             })
                     except:
                         pass
                     
-                    progress = 50 + int((i / total) * 45)
-                    search_state["progress"] = min(progress, 95)
-                    search_state["status"] = f"Validando... {i+1}/{total}"
+                    progress = 45 + int((i / total) * 20)
+                    search_state["progress"] = min(progress, 65)
+                    search_state["status"] = f"Fase 1: {i+1}/{total}"
                 
-                # Ordenar por confianza (los más relevantes primero)
-                validated.sort(key=lambda x: x["confidence"], reverse=True)
-                # Devolver solo los N mejores resultados
-                search_state["results"] = validated[:max_results]
-                search_state["status"] = f"Completado: {len(search_state['results'])} dominios encontrados"
+                search_state["status"] = f"Fase 1 completada: {len(phase1_passed)} candidatos"
+                
+                if not phase1_passed:
+                    search_state["status"] = "No se encontraron webs del tipo solicitado"
+                    search_state["progress"] = 100
+                    search_state["is_searching"] = False
+                    return
+                
+                # Ordenar por confianza
+                phase1_passed.sort(key=lambda x: x["confidence"], reverse=True)
+                
+                # === FASE 2: Verificar tecnologías con Wappalyzer ===
+                validated_with_tech = []
+                validated_without_tech = []
+                
+                start_time = time.time()
+                wappalyzer = WappalyzerAnalyzer() if has_tech_filters else None
+                
+                search_state["status"] = "Fase 2: Analizando tecnologías..."
+                total_phase2 = len(phase1_passed)
+                
+                for i, item in enumerate(phase1_passed):
+                    elapsed = time.time() - start_time
+                    
+                    result = item["validation_result"]
+                    sr = item["search_result"]
+                    
+                    # Extraer info de schema si existe
+                    schema_info = {}
+                    if result.schema_data:
+                        schema_info = {
+                            "types": result.schema_data.get("types", [])[:3],
+                            "is_ecommerce": result.schema_data.get("is_ecommerce", False),
+                            "is_service": result.schema_data.get("is_service_business", False),
+                            "has_products": result.schema_data.get("has_products", False),
+                            "product_count": result.schema_data.get("product_count", 0),
+                            "has_reviews": result.schema_data.get("has_reviews", False),
+                            "rating": result.schema_data.get("aggregate_rating")
+                        }
+                    
+                    domain_info = {
+                        "domain": result.domain,
+                        "url": result.url,
+                        "confidence": round(result.confidence_score, 1),
+                        "title": result.page_title[:60] + "..." if len(result.page_title) > 60 else result.page_title,
+                        "reasons": result.validation_reasons[:3],
+                        "tech": [],
+                        "tech_profile": None,
+                        "is_ecommerce": False,
+                        "schema": schema_info,
+                        "tech_match": False
+                    }
+                    
+                    # Siempre guardar en la lista sin filtro de tech
+                    validated_without_tech.append(domain_info.copy())
+                    
+                    # Si hay filtros de tecnología, verificar con Wappalyzer
+                    if has_tech_filters and wappalyzer:
+                        try:
+                            wap_profile = wappalyzer.analyze(sr.url)
+                            
+                            if wap_profile.analysis_success:
+                                domain_info["tech_profile"] = {
+                                    "all_techs": wap_profile.all_technologies_names[:10],
+                                    "crm": wap_profile.crm,
+                                    "email": wap_profile.email_marketing,
+                                    "chat": wap_profile.live_chat,
+                                    "analytics": wap_profile.analytics,
+                                    "ecommerce": wap_profile.ecommerce,
+                                    "cms": wap_profile.cms
+                                }
+                                domain_info["tech"] = wap_profile.ecommerce[:3]
+                                domain_info["is_ecommerce"] = wap_profile.has_ecommerce
+                                
+                                # Verificar requisitos de tecnología
+                                meets_tech, tech_reason = wappalyzer.check_technology_requirements(
+                                    wap_profile,
+                                    must_have=analysis.required_tools if hasattr(analysis, 'required_tools') else [],
+                                    must_not=analysis.excluded_tools if hasattr(analysis, 'excluded_tools') else []
+                                )
+                                
+                                if meets_tech:
+                                    domain_info["tech_match"] = True
+                                    if tech_reason:
+                                        domain_info["reasons"].append(f"Tech: {tech_reason}")
+                                    validated_with_tech.append(domain_info)
+                        except Exception as e:
+                            pass
+                    
+                    # Actualizar progreso
+                    progress = 65 + int((i / total_phase2) * 30)
+                    search_state["progress"] = min(progress, 95)
+                    
+                    # Mostrar estado actual
+                    if has_tech_filters:
+                        search_state["status"] = f"Fase 2: {i+1}/{total_phase2} | Con tech: {len(validated_with_tech)}"
+                    else:
+                        search_state["status"] = f"Fase 2: {i+1}/{total_phase2}"
+                    
+                    # Verificar timeout
+                    if has_tech_filters and elapsed >= TECHNOLOGY_FILTER_TIMEOUT and len(validated_with_tech) == 0:
+                        search_state["status"] = f"⚠️ Timeout ({TECHNOLOGY_FILTER_TIMEOUT}s): usando resultados sin filtro de tecnología"
+                        break
+                
+                # === Determinar resultados finales ===
+                if has_tech_filters:
+                    if len(validated_with_tech) > 0:
+                        # Tenemos resultados con filtro de tecnología
+                        validated_with_tech.sort(key=lambda x: x["confidence"], reverse=True)
+                        search_state["results"] = validated_with_tech[:max_results]
+                        search_state["status"] = f"✓ Completado: {len(search_state['results'])} dominios con tecnología requerida"
+                    else:
+                        # No hay resultados con tech, usar fallback
+                        validated_without_tech.sort(key=lambda x: x["confidence"], reverse=True)
+                        search_state["results"] = validated_without_tech[:max_results]
+                        search_state["status"] = f"⚠️ {len(search_state['results'])} dominios (sin filtro de tecnología)"
+                else:
+                    # No hay filtros de tecnología
+                    validated_without_tech.sort(key=lambda x: x["confidence"], reverse=True)
+                    search_state["results"] = validated_without_tech[:max_results]
+                    search_state["status"] = f"✓ Completado: {len(search_state['results'])} dominios encontrados"
+                
                 search_state["progress"] = 100
                 
             except Exception as e:

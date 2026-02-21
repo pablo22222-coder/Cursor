@@ -402,6 +402,17 @@
                 if (analysis.queries_count) {
                     tags.innerHTML += `<span class="px-2 py-1 bg-gray-100 text-gray-600 rounded text-sm">${analysis.queries_count} queries</span>`;
                 }
+                // Tech requirements
+                if (analysis.tech_must_have && analysis.tech_must_have.length > 0) {
+                    analysis.tech_must_have.forEach(tech => {
+                        tags.innerHTML += `<span class="px-2 py-1 bg-emerald-100 text-emerald-700 rounded text-sm">✓ Con ${tech}</span>`;
+                    });
+                }
+                if (analysis.tech_must_not && analysis.tech_must_not.length > 0) {
+                    analysis.tech_must_not.forEach(tech => {
+                        tags.innerHTML += `<span class="px-2 py-1 bg-red-100 text-red-700 rounded text-sm">✗ Sin ${tech}</span>`;
+                    });
+                }
 
                 summary.classList.remove('hidden');
             }
@@ -427,6 +438,28 @@
                     ? '<span class="px-2 py-0.5 bg-blue-100 text-blue-600 rounded text-xs">Ecommerce</span>' 
                     : '';
 
+                // Tech match badge (si cumple filtros de tecnología)
+                const techMatchBadge = result.tech_match 
+                    ? '<span class="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded text-xs" title="Cumple requisitos de tecnología">✓ Tech</span>'
+                    : '';
+
+                // Tech profile badges (from Wappalyzer)
+                let techProfileBadges = '';
+                if (result.tech_profile) {
+                    if (result.tech_profile.crm && result.tech_profile.crm.length > 0) {
+                        techProfileBadges += `<span class="px-2 py-0.5 bg-blue-50 text-blue-600 rounded text-xs" title="CRM: ${result.tech_profile.crm.join(', ')}">CRM</span>`;
+                    }
+                    if (result.tech_profile.email && result.tech_profile.email.length > 0) {
+                        techProfileBadges += `<span class="px-2 py-0.5 bg-orange-50 text-orange-600 rounded text-xs" title="Email: ${result.tech_profile.email.join(', ')}">Email</span>`;
+                    }
+                    if (result.tech_profile.chat && result.tech_profile.chat.length > 0) {
+                        techProfileBadges += `<span class="px-2 py-0.5 bg-cyan-50 text-cyan-600 rounded text-xs" title="Chat: ${result.tech_profile.chat.join(', ')}">Chat</span>`;
+                    }
+                    if (result.tech_profile.analytics && result.tech_profile.analytics.length > 0) {
+                        techProfileBadges += `<span class="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs" title="Analytics: ${result.tech_profile.analytics.join(', ')}">Analytics</span>`;
+                    }
+                }
+
                 // Schema.org badges
                 let schemaBadges = '';
                 if (result.schema) {
@@ -449,14 +482,16 @@
                         <div class="flex-1 min-w-0">
                             <div class="flex items-center gap-2 mb-1 flex-wrap">
                                 <h3 class="font-semibold text-gray-900 truncate">${result.domain}</h3>
+                                ${techMatchBadge}
                                 ${ecommerceBadge}
                                 ${techBadges}
                                 ${schemaBadges}
                             </div>
                             <p class="text-sm text-gray-500 truncate mb-2">${result.title || result.url}</p>
-                            <div class="flex flex-wrap gap-1">
+                            <div class="flex flex-wrap gap-1 mb-2">
                                 ${result.reasons ? result.reasons.map(r => `<span class="text-xs text-gray-400">${r}</span>`).join(' · ') : ''}
                             </div>
+                            ${techProfileBadges ? `<div class="flex flex-wrap gap-1">${techProfileBadges}</div>` : ''}
                         </div>
                         <div class="flex flex-col items-end gap-2">
                             <span class="px-3 py-1 rounded-full text-sm font-semibold ${confidenceColor}">

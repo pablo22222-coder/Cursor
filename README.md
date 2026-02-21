@@ -11,6 +11,9 @@ Cuando buscas "ecommerce" en Google, obtienes artículos sobre "qué es ecommerc
 - `agencia de marketing digital` → Encuentra agencias reales, no blogs sobre marketing
 - `saas de gestión de proyectos` → Encuentra herramientas SaaS reales
 - `tienda de ropa old money` → Encuentra tiendas con ese estilo específico
+- `ecommerce sin shopify` → Encuentra tiendas que NO usan Shopify
+- `webs con hubspot` → Encuentra webs que usan HubSpot CRM
+- `tiendas online sin CRM` → Encuentra tiendas sin ningún sistema CRM
 
 ## 🏗️ Arquitectura
 
@@ -18,29 +21,39 @@ Cuando buscas "ecommerce" en Google, obtienes artículos sobre "qué es ecommerc
 /workspace/
 ├── config/
 │   ├── __init__.py
-│   └── settings.py           # API keys y configuración
+│   └── settings.py              # API keys y configuración
 ├── src/
 │   ├── __init__.py
-│   ├── main.py               # Punto de entrada principal
+│   ├── main.py                  # Punto de entrada principal
 │   ├── prompt_interpreter/
 │   │   ├── __init__.py
-│   │   └── gemini_interpreter.py   # Interpreta prompts con Gemini AI
+│   │   ├── gemini_interpreter.py    # Interpreta prompts con Gemini AI
+│   │   ├── semantic_parser.py       # Parser semántico avanzado
+│   │   ├── intent_detector.py       # Detección de intención del usuario
+│   │   └── query_generator.py       # Generador de queries optimizados
 │   ├── web_search/
 │   │   ├── __init__.py
-│   │   └── serper_search.py        # Búsqueda web con Serper API
+│   │   └── serper_search.py         # Búsqueda web con Serper API
 │   ├── web_analyzer/
 │   │   ├── __init__.py
-│   │   ├── pagespeed_analyzer.py   # Métricas con PageSpeed API
-│   │   └── webtech_analyzer.py     # Detección de tecnologías
+│   │   ├── pagespeed_analyzer.py    # Métricas con PageSpeed API
+│   │   └── wappalyzer_analyzer.py   # Detección de tecnologías con Wappalyzergo
 │   ├── domain_validator/
 │   │   ├── __init__.py
-│   │   └── validator.py            # Validación de dominios
+│   │   └── validator.py             # Validación de dominios + Schema.org
+│   ├── web/
+│   │   ├── __init__.py
+│   │   ├── app.py                   # Servidor Flask con API REST
+│   │   └── templates/
+│   │       └── index.html           # Interfaz web moderna
 │   └── utils/
 │       ├── __init__.py
-│       └── helpers.py              # Funciones de utilidad
+│       └── helpers.py               # Funciones de utilidad
+├── run_web.py                   # Script para iniciar interfaz web
 ├── tests/
 │   └── test_main.py
 ├── requirements.txt
+├── .env                         # Variables de entorno (API keys)
 └── README.md
 ```
 
@@ -105,10 +118,11 @@ for result in results:
 ## 📊 Flujo del sistema
 
 ```
-1. PROMPT → "ecommerce de crema facial"
+1. PROMPT → "ecommerce de crema facial sin shopify"
         ↓
-2. GEMINI INTERPRETER
+2. SEMANTIC PARSER + GEMINI INTERPRETER
    - Detecta: tipo=ecommerce, categoría=cosméticos
+   - Detecta filtros de tecnología: must_not=["shopify"]
    - Genera queries inteligentes:
      • "tienda crema facial online"
      • "comprar crema facial"
@@ -119,36 +133,51 @@ for result in results:
    - Filtra dominios duplicados
    - Excluye Wikipedia, Medium, etc.
         ↓
-4. DOMAIN VALIDATOR
-   - Analiza contenido de cada web
-   - Detecta indicadores de ecommerce
-   - Verifica tecnologías (Shopify, WooCommerce)
-   - Calcula score de confianza
+4. VALIDACIÓN FASE 1 (Tipo de web)
+   - Analiza contenido HTML de cada web
+   - Extrae datos Schema.org / JSON-LD
+   - Verifica metadatos y estructura
+   - Calcula score de confianza inicial
         ↓
-5. RESULTADOS
+5. VALIDACIÓN FASE 2 (Tecnología con Wappalyzer)
+   - Solo para dominios que pasan Fase 1
+   - Ejecuta wappalyzergo para detectar tecnologías
+   - Verifica filtros must_have y must_not
+   - Si no hay resultados en 180s, usa fallback
+        ↓
+6. RESULTADOS
    - Lista de dominios válidos
    - Ordenados por confianza
-   - Con metadatos (tecnologías, keywords)
+   - Con tecnologías detectadas (CRM, Chat, Email, etc.)
+   - Con datos Schema.org (productos, reviews, etc.)
 ```
 
-## 🔑 APIs utilizadas
+### Timeout de tecnología
+
+Si el prompt especifica filtros de tecnología (ej: "sin crm") y después de 180 segundos no se encuentra ningún resultado que cumpla, el sistema devuelve los mejores resultados sin aplicar el filtro de tecnología. Esto garantiza que siempre obtendrás resultados útiles.
+
+## 🔑 APIs y herramientas utilizadas
 
 ### 1. Gemini AI (Google)
 - **Función**: Interpreta el prompt y genera queries inteligentes
-- **Ventaja**: Entiende contexto y genera búsquedas relevantes
+- **Ventaja**: Entiende contexto, detecta negaciones, y genera búsquedas relevantes
 
 ### 2. Serper API
 - **Función**: Búsqueda en Google
 - **Ventaja**: Resultados de Google sin scraping
 
-### 3. WebTech
-- **Función**: Detecta tecnologías web
+### 3. Wappalyzergo (Binario Go)
+- **Función**: Detecta tecnologías web con alta precisión
+- **Instalación**: Requiere el binario `wappalyzergo` en el PATH
 - **Detecta**: 
-  - CMS (WordPress, Joomla)
-  - E-commerce (Shopify, WooCommerce, Magento)
-  - Frameworks (React, Vue, Angular)
-  - Analytics (Google Analytics, Hotjar)
-  - Payment (Stripe, PayPal)
+  - **CRM**: HubSpot, Salesforce, Zoho, Pipedrive, etc.
+  - **Email Marketing**: Mailchimp, Klaviyo, ActiveCampaign, etc.
+  - **Live Chat**: Intercom, Drift, Crisp, Zendesk, Tidio, etc.
+  - **E-commerce**: Shopify, WooCommerce, Magento, PrestaShop, etc.
+  - **CMS**: WordPress, Joomla, Drupal, Wix, Squarespace, etc.
+  - **Analytics**: Google Analytics, Hotjar, Mixpanel, Clarity, etc.
+  - **Payment**: Stripe, PayPal, Klarna, Redsys, etc.
+  - **Frameworks**: React, Vue, Angular, Next.js, etc.
 
 ### 4. PageSpeed Insights API (Opcional)
 - **Función**: Analiza rendimiento
@@ -157,6 +186,16 @@ for result in results:
   - SEO score
   - Core Web Vitals
   - Mobile-friendly
+
+## 🛠️ Instalación de Wappalyzergo
+
+```bash
+# Descargar el binario de wappalyzergo
+go install -v github.com/projectdiscovery/wappalyzergo/cmd/wappalyzergo@latest
+
+# O descargar binario precompilado desde releases
+# https://github.com/projectdiscovery/wappalyzergo/releases
+```
 
 ## 📋 Opciones de línea de comandos
 
@@ -204,6 +243,23 @@ python -m src.main "agencia de SEO en Madrid"
 ```bash
 python -m src.main "webs con velocidad de carga lenta" --use-pagespeed
 python -m src.main "ecommerce rápido" --use-pagespeed
+```
+
+### Con filtros de tecnología
+```bash
+# Webs que usan una tecnología específica
+python -m src.main "ecommerce con hubspot"
+python -m src.main "tiendas online con klaviyo"
+python -m src.main "webs con intercom"
+
+# Webs que NO usan una tecnología
+python -m src.main "ecommerce sin shopify"
+python -m src.main "tiendas online sin crm"
+python -m src.main "webs sin chat"
+
+# Combinaciones
+python -m src.main "ecommerce con stripe pero sin shopify"
+python -m src.main "agencias con hubspot pero sin intercom"
 ```
 
 ## 📤 Formato de salida

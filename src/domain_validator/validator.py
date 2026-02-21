@@ -2,6 +2,7 @@
 Validador de dominios.
 Verifica si un dominio cumple con los criterios especificados en el prompt.
 Incluye análisis de Schema.org / JSON-LD para validación precisa.
+Usa Wappalyzergo para detección de tecnologías.
 """
 import requests
 import re
@@ -12,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
 from src.prompt_interpreter.gemini_interpreter import PromptAnalysis
-from src.web_analyzer.webtech_analyzer import WebTechAnalyzer, TechnologyProfile
+from src.web_analyzer.wappalyzer_analyzer import WappalyzerAnalyzer, WappalyzerProfile
 from src.web_analyzer.pagespeed_analyzer import PageSpeedAnalyzer, PerformanceMetrics
 from src.web_search.serper_search import SearchResult
 
@@ -133,17 +134,18 @@ class DomainValidator:
     """
     Valida si los dominios encontrados cumplen con los criterios del prompt.
     Usa múltiples señales para determinar si una web ES lo que se busca.
+    Utiliza Wappalyzergo para detección de tecnologías.
     """
     
-    def __init__(self, use_webtech: bool = True, use_pagespeed: bool = False):
+    def __init__(self, use_wappalyzer: bool = True, use_pagespeed: bool = False):
         """
         Args:
-            use_webtech: Si usar WebTech para análisis de tecnologías
+            use_wappalyzer: Si usar Wappalyzergo para análisis de tecnologías
             use_pagespeed: Si usar PageSpeed para métricas (solo si el prompt lo requiere)
         """
-        self.use_webtech = use_webtech
+        self.use_wappalyzer = use_wappalyzer
         self.use_pagespeed = use_pagespeed
-        self.webtech = WebTechAnalyzer() if use_webtech else None
+        self.wappalyzer = WappalyzerAnalyzer() if use_wappalyzer else None
         self.pagespeed = PageSpeedAnalyzer() if use_pagespeed else None
         
         # Headers para requests
@@ -209,18 +211,18 @@ class DomainValidator:
                 elif result.schema_data.get("is_service_business") and analysis.business_type in ["agencia", "agency"]:
                     result.validation_reasons.append("Schema.org confirma servicios")
             
-            # 3. Análisis de tecnologías (si está habilitado)
-            if self.use_webtech:
-                tech_score, tech_profile = self._analyze_technologies(search_result.url, analysis)
+            # 3. Análisis de tecnologías con Wappalyzer (si está habilitado)
+            if self.use_wappalyzer:
+                tech_score, wappalyzer_profile = self._analyze_technologies(search_result.url, analysis)
                 confidence += tech_score * 0.2  # 20% del peso
-                result.tech_profile = tech_profile.to_dict() if tech_profile else None
+                result.tech_profile = wappalyzer_profile.to_dict() if wappalyzer_profile else None
                 
                 if tech_score > 50:
                     result.validation_reasons.append(f"Tecnologías compatibles (score: {tech_score:.0f})")
                 
                 # Verificar filtros de herramientas si existen
-                if tech_profile:
-                    tools_ok, tools_reason = self._check_tool_filters(tech_profile, analysis)
+                if wappalyzer_profile:
+                    tools_ok, tools_reason = self._check_tool_filters(wappalyzer_profile, analysis)
                     if not tools_ok:
                         # Rechazar si no cumple con los filtros de herramientas
                         result.rejection_reasons.append(tools_reason)
@@ -814,12 +816,12 @@ class DomainValidator:
         
         return min(penalty, 40)  # Máximo 40 de penalización
     
-    def _check_tool_filters(self, tech_profile: TechnologyProfile, analysis: PromptAnalysis) -> tuple:
+    def _check_tool_filters(self, wappalyzer_profile: WappalyzerProfile, analysis: PromptAnalysis) -> tuple:
         """
-        Verifica si el perfil tecnológico cumple con los filtros de herramientas.
+        Verifica si el perfil tecnológico de Wappalyzer cumple con los filtros de herramientas.
         
         Args:
-            tech_profile: Perfil tecnológico de la web
+            wappalyzer_profile: Perfil tecnológico de Wappalyzer
             analysis: Análisis del prompt con filtros
             
         Returns:
@@ -832,54 +834,72 @@ class DomainValidator:
         if not required_tools and not excluded_tools:
             return True, ""
         
-        all_detected_tools = [t.lower() for t in tech_profile.all_tools]
+        # Usar el método de WappalyzerProfile para verificar requisitos
+        meets_requirements, reason = wappalyzer_profile.check_technology_requirements(
+            wappalyzer_profile,
+            must_have=required_tools,
+            must_not=excluded_tools
+        ) if hasattr(self.wappalyzer, 'check_technology_requirements') else (True, "")
         
-        # Verificar herramientas requeridas
-        for required in required_tools:
-            required_lower = required.lower()
+        # Usar WappalyzerAnalyzer para verificar
+        if self.wappalyzer:
+            meets_requirements, reason = self.wappalyzer.check_technology_requirements(
+                wappalyzer_profile,
+                must_have=required_tools,
+                must_not=excluded_tools
+            )
             
-            # Buscar si tiene la herramienta o categoría
-            has_tool = False
+            if not meets_requirements:
+                return False, reason
+        else:
+            # Fallback: verificar manualmente
+            all_detected_tools = [t.lower() for t in wappalyzer_profile.all_technologies_names]
             
-            # Verificar por nombre exacto
-            if any(required_lower in tool for tool in all_detected_tools):
-                has_tool = True
-            
-            # Verificar por categoría
-            if not has_tool:
-                if required_lower == "crm" and tech_profile.has_crm:
+            # Verificar herramientas requeridas
+            for required in required_tools:
+                required_lower = required.lower()
+                
+                has_tool = False
+                
+                # Verificar por nombre
+                if any(required_lower in tool for tool in all_detected_tools):
                     has_tool = True
-                elif required_lower in ["chat", "livechat"] and tech_profile.has_chat:
-                    has_tool = True
-                elif required_lower in ["email", "email marketing"] and tech_profile.has_email_marketing:
-                    has_tool = True
-                elif required_lower in ["analytics", "analíticas"] and tech_profile.has_analytics:
-                    has_tool = True
-                elif required_lower in ["heatmap", "heatmaps"] and tech_profile.has_heatmaps:
-                    has_tool = True
+                
+                # Verificar por categoría
+                if not has_tool:
+                    if required_lower == "crm" and wappalyzer_profile.has_crm:
+                        has_tool = True
+                    elif required_lower in ["chat", "livechat", "live_chat"] and wappalyzer_profile.has_live_chat:
+                        has_tool = True
+                    elif required_lower in ["email", "email_marketing", "email marketing"] and wappalyzer_profile.has_email_marketing:
+                        has_tool = True
+                    elif required_lower in ["analytics", "analíticas"] and wappalyzer_profile.has_analytics:
+                        has_tool = True
+                    elif required_lower in ["ecommerce", "e-commerce"] and wappalyzer_profile.has_ecommerce:
+                        has_tool = True
+                    elif required_lower in ["payment", "pago"] and wappalyzer_profile.has_payment:
+                        has_tool = True
+                
+                if not has_tool:
+                    return False, f"No tiene {required}"
             
-            if not has_tool:
-                return False, f"No tiene {required}"
-        
-        # Verificar herramientas excluidas
-        for excluded in excluded_tools:
-            excluded_lower = excluded.lower()
-            
-            # Verificar por nombre exacto
-            if any(excluded_lower in tool for tool in all_detected_tools):
-                return False, f"Tiene {excluded} (excluido)"
-            
-            # Verificar por categoría
-            if excluded_lower == "crm" and tech_profile.has_crm:
-                return False, f"Tiene CRM: {', '.join(tech_profile.crm)}"
-            elif excluded_lower in ["chat", "livechat"] and tech_profile.has_chat:
-                return False, f"Tiene chat: {', '.join(tech_profile.chat_widgets)}"
-            elif excluded_lower in ["email", "email marketing"] and tech_profile.has_email_marketing:
-                return False, f"Tiene email marketing: {', '.join(tech_profile.email_marketing)}"
-            elif excluded_lower in ["analytics", "analíticas"] and tech_profile.has_analytics:
-                return False, f"Tiene analytics: {', '.join(tech_profile.analytics)}"
-            elif excluded_lower in ["heatmap", "heatmaps"] and tech_profile.has_heatmaps:
-                return False, f"Tiene heatmaps: {', '.join(tech_profile.heatmaps)}"
+            # Verificar herramientas excluidas
+            for excluded in excluded_tools:
+                excluded_lower = excluded.lower()
+                
+                # Verificar por nombre
+                if any(excluded_lower in tool for tool in all_detected_tools):
+                    return False, f"Tiene {excluded} (excluido)"
+                
+                # Verificar por categoría
+                if excluded_lower == "crm" and wappalyzer_profile.has_crm:
+                    return False, f"Tiene CRM: {', '.join(wappalyzer_profile.crm[:2])}"
+                elif excluded_lower in ["chat", "livechat", "live_chat"] and wappalyzer_profile.has_live_chat:
+                    return False, f"Tiene chat: {', '.join(wappalyzer_profile.live_chat[:2])}"
+                elif excluded_lower in ["email", "email_marketing", "email marketing"] and wappalyzer_profile.has_email_marketing:
+                    return False, f"Tiene email marketing: {', '.join(wappalyzer_profile.email_marketing[:2])}"
+                elif excluded_lower in ["analytics", "analíticas"] and wappalyzer_profile.has_analytics:
+                    return False, f"Tiene analytics: {', '.join(wappalyzer_profile.analytics[:2])}"
         
         # Todo OK
         if required_tools:
@@ -891,43 +911,62 @@ class DomainValidator:
     
     def _analyze_technologies(self, url: str, analysis: PromptAnalysis) -> tuple:
         """
-        Analiza las tecnologías de la web.
-        Retorna (score, tech_profile).
+        Analiza las tecnologías de la web usando Wappalyzergo.
+        Retorna (score, wappalyzer_profile).
         """
-        if not self.webtech:
+        if not self.wappalyzer:
             return 50, None
         
         try:
-            profile = self.webtech.analyze(url)
+            profile = self.wappalyzer.analyze(url)
             score = 50.0
+            
+            if not profile.analysis_success:
+                return 50, profile
             
             # Verificar si las tecnologías coinciden con el tipo de negocio
             if analysis.business_type == "ecommerce":
-                if profile.is_ecommerce:
+                if profile.has_ecommerce:
                     score += 30
-                if profile.payment:
+                if profile.has_payment:
                     score += 10
+                # Bonus por plataformas ecommerce conocidas
+                if any(ec in [t.lower() for t in profile.all_technologies_names] 
+                       for ec in ["shopify", "woocommerce", "magento", "prestashop", "bigcommerce"]):
+                    score += 15
             elif analysis.business_type == "saas":
-                if profile.is_saas:
-                    score += 30
+                # Indicadores de SaaS
+                if profile.has_analytics:
+                    score += 10
+                if any(fw in [t.lower() for t in profile.all_technologies_names]
+                       for fw in ["react", "vue", "angular", "next.js", "nuxt"]):
+                    score += 15
             
             # Verificar tecnologías requeridas
-            if analysis.required_technologies:
-                matches = self.webtech.matches_criteria(
-                    profile,
-                    required_techs=analysis.required_technologies
-                )
-                if matches:
-                    score += 20
+            required_techs = getattr(analysis, 'required_technologies', []) or []
+            if required_techs:
+                for tech in required_techs:
+                    if profile.has_technology(tech):
+                        score += 10
             
             # Verificar tecnologías excluidas
-            if analysis.excluded_technologies:
-                has_excluded = not self.webtech.matches_criteria(
-                    profile,
-                    excluded_techs=analysis.excluded_technologies
-                )
-                if has_excluded:
-                    score -= 30
+            excluded_techs = getattr(analysis, 'excluded_technologies', []) or []
+            if excluded_techs:
+                for tech in excluded_techs:
+                    if profile.has_technology(tech):
+                        score -= 20
+            
+            # Bonus por tener CRM (indica negocio activo)
+            if profile.has_crm:
+                score += 5
+            
+            # Bonus por tener email marketing (indica negocio activo)
+            if profile.has_email_marketing:
+                score += 5
+            
+            # Bonus por tener analytics (indica negocio que rastrea métricas)
+            if profile.has_analytics:
+                score += 3
             
             return max(0, min(100, score)), profile
             

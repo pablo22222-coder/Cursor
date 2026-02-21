@@ -85,6 +85,82 @@ class SemanticParser:
     Devuelve un JSON estructurado con campos específicos.
     """
     
+    # Tecnologías detectables por Wappalyzergo - organizadas por categoría
+    DETECTABLE_TECHNOLOGIES = {
+        "crm": [
+            "hubspot", "salesforce", "zoho", "pipedrive", "freshsales",
+            "copper", "monday", "close", "insightly", "nimble", "zendesk sell",
+            "microsoft dynamics", "sugarcrm", "vtiger", "odoo"
+        ],
+        "email_marketing": [
+            "mailchimp", "klaviyo", "activecampaign", "convertkit", "sendinblue",
+            "brevo", "getresponse", "drip", "constant contact", "aweber",
+            "omnisend", "moosend", "mailerlite", "campaign monitor", "sendgrid"
+        ],
+        "live_chat": [
+            "intercom", "drift", "crisp", "zendesk", "tidio", "tawk",
+            "livechat", "freshchat", "olark", "chatra", "userlike",
+            "smartsupp", "customerly", "helpcrunch", "gorgias", "zopim"
+        ],
+        "analytics": [
+            "google analytics", "ga4", "google tag manager", "gtm", "hotjar", "mixpanel",
+            "amplitude", "heap", "fullstory", "mouseflow", "crazy egg",
+            "clarity", "smartlook", "matomo", "plausible", "fathom", "segment"
+        ],
+        "ecommerce_platform": [
+            "shopify", "woocommerce", "magento", "prestashop", "bigcommerce",
+            "opencart", "vtex", "salesforce commerce", "sap commerce",
+            "wix stores", "squarespace commerce", "ecwid", "volusion",
+            "3dcart", "nopcommerce", "cs-cart"
+        ],
+        "payment": [
+            "stripe", "paypal", "square", "braintree", "adyen", "klarna",
+            "afterpay", "affirm", "redsys", "bizum", "mollie", "worldpay",
+            "checkout.com", "razorpay", "mercado pago"
+        ],
+        "cms": [
+            "wordpress", "joomla", "drupal", "wix", "squarespace", "webflow",
+            "ghost", "contentful", "strapi", "sanity", "prismic", "typo3",
+            "sitecore", "kentico", "umbraco", "hubspot cms"
+        ],
+        "frameworks": [
+            "react", "vue", "angular", "next.js", "nuxt", "gatsby",
+            "svelte", "ember", "backbone", "jquery", "bootstrap", "tailwind"
+        ],
+        "hosting": [
+            "aws", "google cloud", "azure", "cloudflare", "vercel", "netlify",
+            "heroku", "digitalocean", "linode", "godaddy", "bluehost", "siteground"
+        ],
+        "marketing_automation": [
+            "marketo", "pardot", "eloqua", "autopilot", "drip", "infusionsoft",
+            "keap", "sharpspring", "act-on"
+        ],
+        "ab_testing": [
+            "optimizely", "vwo", "ab tasty", "google optimize", "unbounce"
+        ],
+        "popup_tools": [
+            "optinmonster", "sumo", "privy", "sleeknote", "wisepops", "popupsmart"
+        ],
+        "reviews": [
+            "trustpilot", "yotpo", "judge.me", "stamped", "reviews.io", "bazaarvoice"
+        ]
+    }
+    
+    # Aliases y variaciones de nombres de tecnología
+    TECHNOLOGY_ALIASES = {
+        "google analytics": ["ga", "analytics", "google-analytics"],
+        "google tag manager": ["gtm", "tag manager"],
+        "hubspot": ["hub spot", "hub-spot"],
+        "mailchimp": ["mail chimp", "mail-chimp"],
+        "woocommerce": ["woo commerce", "woo-commerce"],
+        "shopify": ["shop-ify"],
+        "wordpress": ["word press", "word-press", "wp"],
+        "crm": ["gestión de clientes", "customer relationship"],
+        "email marketing": ["email", "correo", "newsletter", "mailing"],
+        "live chat": ["chat", "chat en vivo", "chat online", "livechat"],
+        "analytics": ["analíticas", "análisis", "tracking", "rastreo"],
+    }
+    
     SYSTEM_PROMPT = '''Eres un parser semántico de prompts. Tu tarea es analizar el texto de entrada y devolver ÚNICAMENTE un JSON válido con la estructura exacta especificada.
 
 REGLAS ESTRICTAS:
@@ -169,6 +245,22 @@ product_or_service:
 - consultoria: servicios de asesoría
 - servicio: servicios generales
 
+TECNOLOGÍAS DETECTABLES (para must_have y must_not):
+- CRM: hubspot, salesforce, zoho, pipedrive, freshsales, microsoft dynamics
+- Email Marketing: mailchimp, klaviyo, activecampaign, sendinblue/brevo, getresponse
+- Live Chat: intercom, drift, crisp, zendesk, tidio, tawk.to, livechat
+- Analytics: google analytics, hotjar, mixpanel, amplitude, clarity, matomo
+- Ecommerce: shopify, woocommerce, magento, prestashop, bigcommerce
+- Payment: stripe, paypal, klarna, afterpay, redsys, bizum
+- CMS: wordpress, joomla, drupal, wix, squarespace, webflow
+- Marketing: optimizely, vwo, unbounce, optinmonster, sumo
+
+IMPORTANTE para must_have/must_not:
+- Si el usuario menciona "sin X" o "no X" → must_not: ["X"]
+- Si el usuario menciona "con X" o "que tenga X" → must_have: ["X"]
+- Si el usuario menciona una CATEGORÍA (ej: "sin CRM", "con chat") → must_not/must_have debe incluir la CATEGORÍA
+- Si el usuario menciona una HERRAMIENTA específica (ej: "sin hubspot") → must_not/must_have debe incluir la herramienta
+
 EJEMPLOS:
 
 Prompt: "agencias de marketing digital en Madrid"
@@ -176,6 +268,15 @@ Prompt: "agencias de marketing digital en Madrid"
 
 Prompt: "ecommerce de ropa sin shopify"
 → type: ecommerce, niche: ["moda", "ropa"], must_not: ["shopify"]
+
+Prompt: "tiendas online sin CRM"
+→ type: ecommerce, must_not: ["crm"]
+
+Prompt: "webs con hubspot pero sin intercom"
+→ must_have: ["hubspot"], must_not: ["intercom"]
+
+Prompt: "ecommerce que no tenga chat"
+→ type: ecommerce, must_not: ["chat", "live_chat"]
 
 Prompt: "saas de gestión de proyectos para pymes"
 → type: saas, service: ["gestión de proyectos"], audience: pymes, scale_hint: small/medium
@@ -472,41 +573,94 @@ Responde SOLO con el JSON, nada más.'''
                 }
                 break
         
-        # Detectar must_not (negaciones)
+        # Detectar must_not (negaciones) - mejorado para tecnologías
         negation_patterns = [
-            r"sin\s+(\w+)",
+            r"sin\s+(\w+(?:\s+\w+)?)",
             r"que no tenga\s+(\w+(?:\s+\w+)?)",
             r"excluir\s+(\w+(?:\s+\w+)?)",
-            r"no\s+usar\s+(\w+)",
-            r"no\s+incluir\s+(\w+)",
+            r"no\s+usar\s+(\w+(?:\s+\w+)?)",
+            r"no\s+incluir\s+(\w+(?:\s+\w+)?)",
+            r"que no use\s+(\w+(?:\s+\w+)?)",
+            r"sin ningún\s+(\w+(?:\s+\w+)?)",
+            r"sin ninguna\s+(\w+(?:\s+\w+)?)",
         ]
         
         # Palabras que no son herramientas/exclusiones válidas
-        invalid_exclusions = ["en", "de", "para", "con", "el", "la", "los", "las", "que", "y", "o"]
+        invalid_exclusions = ["en", "de", "para", "con", "el", "la", "los", "las", "que", "y", "o", "un", "una"]
+        
+        # Categorías de tecnología reconocidas
+        technology_categories = {
+            "crm": ["crm", "gestión de clientes", "customer relationship"],
+            "chat": ["chat", "livechat", "live chat", "chat en vivo", "chat online"],
+            "email_marketing": ["email marketing", "email", "mailing", "newsletter", "correo"],
+            "analytics": ["analytics", "analíticas", "tracking", "rastreo"],
+            "payment": ["pago", "payment", "pasarela de pago"],
+        }
+        
+        # Todas las tecnologías conocidas en una lista plana
+        all_known_techs = []
+        for category_techs in self.DETECTABLE_TECHNOLOGIES.values():
+            all_known_techs.extend(category_techs)
         
         for pattern in negation_patterns:
             matches = re.findall(pattern, prompt_lower)
             for match in matches:
                 match_clean = match.strip().lower()
-                if match_clean and len(match_clean) > 2 and match_clean not in invalid_exclusions:
-                    result["must_not"].append(match_clean)
+                if not match_clean or len(match_clean) < 2 or match_clean in invalid_exclusions:
+                    continue
+                
+                # Verificar si es una categoría
+                normalized = match_clean
+                for cat_name, aliases in technology_categories.items():
+                    if match_clean in aliases or match_clean == cat_name:
+                        normalized = cat_name
+                        break
+                
+                # Verificar si es una tecnología conocida
+                for tech in all_known_techs:
+                    if tech in match_clean or match_clean in tech:
+                        normalized = tech
+                        break
+                
+                if normalized not in result["must_not"]:
+                    result["must_not"].append(normalized)
         
-        # Detectar must_have
+        # Detectar must_have - mejorado para tecnologías
         required_patterns = [
             r"que tenga\s+(\w+(?:\s+\w+)?)",
             r"con\s+(\w+(?:\s+\w+)?)",
             r"usando\s+(\w+(?:\s+\w+)?)",
+            r"que use\s+(\w+(?:\s+\w+)?)",
+            r"con el\s+(\w+(?:\s+\w+)?)",
+            r"que incluya\s+(\w+(?:\s+\w+)?)",
         ]
-        
-        known_tools = ["hubspot", "salesforce", "shopify", "wordpress", "mailchimp", 
-                       "klaviyo", "intercom", "stripe", "paypal", "woocommerce"]
         
         for pattern in required_patterns:
             matches = re.findall(pattern, prompt_lower)
             for match in matches:
-                match_lower = match.strip().lower()
-                if any(tool in match_lower for tool in known_tools):
-                    result["must_have"].append(match.strip())
+                match_clean = match.strip().lower()
+                if not match_clean or len(match_clean) < 2 or match_clean in invalid_exclusions:
+                    continue
+                
+                # Verificar si es una categoría de tecnología
+                is_technology = False
+                normalized = match_clean
+                
+                for cat_name, aliases in technology_categories.items():
+                    if match_clean in aliases or match_clean == cat_name:
+                        normalized = cat_name
+                        is_technology = True
+                        break
+                
+                # Verificar si es una tecnología conocida
+                for tech in all_known_techs:
+                    if tech in match_clean or match_clean in tech:
+                        normalized = tech
+                        is_technology = True
+                        break
+                
+                if is_technology and normalized not in result["must_have"]:
+                    result["must_have"].append(normalized)
         
         # Detectar audiencia
         if any(w in prompt_lower for w in ["b2b", "empresas", "corporativo", "business"]):
@@ -561,3 +715,66 @@ def parse_prompt_to_json(prompt: str) -> str:
     """Función de conveniencia para parsear un prompt y obtener JSON."""
     parser = SemanticParser()
     return parser.parse_to_json(prompt)
+
+
+def get_technology_requirements(parsed: ParsedPrompt) -> dict:
+    """
+    Extrae los requisitos de tecnología del prompt parseado.
+    
+    Returns:
+        Dict con 'must_have' y 'must_not' normalizados
+    """
+    # Categorías conocidas
+    categories = ["crm", "chat", "live_chat", "email_marketing", "email", 
+                  "analytics", "ecommerce", "payment", "cms", "hosting"]
+    
+    def normalize_tech(tech: str) -> tuple:
+        """Normaliza nombre de tecnología y determina si es categoría."""
+        tech_lower = tech.lower().strip()
+        
+        # Verificar si es una categoría
+        if tech_lower in categories:
+            return tech_lower, "category"
+        
+        # Aliases de categorías
+        category_aliases = {
+            "chat": ["chat en vivo", "livechat", "chat online"],
+            "crm": ["gestión de clientes"],
+            "email_marketing": ["email", "mailing", "newsletter"],
+            "analytics": ["analíticas", "tracking", "rastreo"],
+            "payment": ["pago", "pasarela de pago"],
+        }
+        
+        for cat, aliases in category_aliases.items():
+            if tech_lower in aliases:
+                return cat, "category"
+        
+        # Es una tecnología específica
+        return tech_lower, "technology"
+    
+    result = {
+        "must_have": [],
+        "must_not": [],
+        "must_have_categories": [],
+        "must_not_categories": [],
+    }
+    
+    for tech in parsed.must_have:
+        normalized, tech_type = normalize_tech(tech)
+        if tech_type == "category":
+            if normalized not in result["must_have_categories"]:
+                result["must_have_categories"].append(normalized)
+        else:
+            if normalized not in result["must_have"]:
+                result["must_have"].append(normalized)
+    
+    for tech in parsed.must_not:
+        normalized, tech_type = normalize_tech(tech)
+        if tech_type == "category":
+            if normalized not in result["must_not_categories"]:
+                result["must_not_categories"].append(normalized)
+        else:
+            if normalized not in result["must_not"]:
+                result["must_not"].append(normalized)
+    
+    return result
