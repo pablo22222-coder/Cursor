@@ -69,7 +69,6 @@ def create_app():
         prompt = data.get('prompt', '').strip()
         max_results = data.get('max_results', 20)
         extract_contacts = data.get('extract_contacts', True)
-        contact_fields = data.get('contact_fields', ['email', 'phone', 'social_media', 'title'])
         
         if not prompt:
             return jsonify({"error": "El prompt es requerido"}), 400
@@ -290,26 +289,23 @@ def create_app():
                 
                 search_state["progress"] = 90
                 
-                # === FASE 3: Extraer datos de contacto con Katana ===
+                # === FASE 3: Extraer datos de contacto con Katana (Optimizado) ===
                 if extract_contacts and final_results:
                     search_state["status"] = "Fase 3: Extrayendo datos de contacto..."
-                    katana = KatanaExtractor(timeout=KATANA_TIMEOUT)
+                    katana = KatanaExtractor(katana_timeout=KATANA_TIMEOUT, hard_timeout=60)
                     
                     total_contacts = len(final_results)
                     for i, domain_info in enumerate(final_results):
                         try:
-                            search_state["status"] = f"Fase 3: Extrayendo contactos {i+1}/{total_contacts}..."
+                            search_state["status"] = f"Fase 3: Contactos {i+1}/{total_contacts}..."
                             
-                            contact_data = katana.extract(
-                                domain_info["url"],
-                                fields=contact_fields
-                            )
+                            # Extracción optimizada con streaming y early exit
+                            contact_data = katana.extract(domain_info["url"])
                             
                             # Añadir datos de contacto al resultado
                             domain_info["contact"] = {
                                 "email": contact_data.email,
                                 "phone": contact_data.phone,
-                                "title": contact_data.title,
                                 "linkedin": contact_data.linkedin,
                                 "instagram": contact_data.instagram,
                                 "twitter": contact_data.twitter,
@@ -318,19 +314,15 @@ def create_app():
                                 "tiktok": contact_data.tiktok,
                                 "social_media": contact_data.social_media,
                                 "extraction_success": contact_data.extraction_success,
-                                "partial_data": contact_data.partial_data
+                                "partial_data": contact_data.partial_data,
+                                "early_exit": contact_data.early_exit
                             }
-                            
-                            # Actualizar título si Katana encontró uno mejor
-                            if contact_data.title and (not domain_info.get("title") or len(contact_data.title) > len(domain_info.get("title", ""))):
-                                domain_info["title"] = contact_data.title
                                 
                         except Exception as e:
                             # Si falla, dejar el campo de contactos vacío
                             domain_info["contact"] = {
                                 "email": None,
                                 "phone": None,
-                                "title": None,
                                 "linkedin": None,
                                 "instagram": None,
                                 "twitter": None,
@@ -340,6 +332,7 @@ def create_app():
                                 "social_media": [],
                                 "extraction_success": False,
                                 "partial_data": False,
+                                "early_exit": False,
                                 "error": str(e)
                             }
                         
