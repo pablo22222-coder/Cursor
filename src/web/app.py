@@ -29,14 +29,13 @@ from src.prompt_interpreter.semantic_parser import SemanticParser, get_technolog
 from src.web_search.serper_search import SerperSearch
 from src.domain_validator.validator import DomainValidator
 from src.web_analyzer.wappalyzer_analyzer import WappalyzerAnalyzer
-from src.web_analyzer.katana_extractor import KatanaExtractor
+from src.web_analyzer.contact_extractor import ContactExtractor
 from src.utils.helpers import export_to_json, export_to_csv
 
 # Timeout para fallback sin filtro de tecnología (segundos)
 TECHNOLOGY_FILTER_TIMEOUT = 180
-# Timeout para extracción de contactos con Katana (segundos)
-KATANA_TIMEOUT = 30
-KATANA_HARD_TIMEOUT = 45
+# Timeout para extracción de contactos con Playwright (segundos)
+CONTACT_EXTRACTION_TIMEOUT = 45
 
 
 def create_app():
@@ -290,23 +289,27 @@ def create_app():
                 
                 search_state["progress"] = 90
                 
-                # === FASE 3: Extraer datos de contacto con Katana (Ultra-Optimizado) ===
+                # === FASE 3: Extraer datos de contacto con Playwright ===
                 if extract_contacts and final_results:
                     search_state["status"] = "Fase 3: Extrayendo datos de contacto..."
-                    katana = KatanaExtractor(katana_timeout=KATANA_TIMEOUT, hard_timeout=KATANA_HARD_TIMEOUT)
+                    extractor = ContactExtractor(timeout=CONTACT_EXTRACTION_TIMEOUT)
                     
                     total_contacts = len(final_results)
                     for i, domain_info in enumerate(final_results):
                         try:
                             search_state["status"] = f"Fase 3: Contactos {i+1}/{total_contacts}..."
                             
-                            # Extracción optimizada con streaming y early exit
-                            contact_data = katana.extract(domain_info["url"])
+                            # Extracción con Playwright (campos dinámicos)
+                            contact_data = extractor.extract(
+                                domain_info["url"],
+                                fields=['email', 'phone', 'social', 'title']
+                            )
                             
                             # Añadir datos de contacto al resultado
                             domain_info["contact"] = {
                                 "email": contact_data.email,
                                 "phone": contact_data.phone,
+                                "title": contact_data.title,
                                 "linkedin": contact_data.linkedin,
                                 "instagram": contact_data.instagram,
                                 "twitter": contact_data.twitter,
@@ -316,14 +319,19 @@ def create_app():
                                 "social_media": contact_data.social_media,
                                 "extraction_success": contact_data.extraction_success,
                                 "partial_data": contact_data.partial_data,
-                                "early_exit": contact_data.early_exit
+                                "source": contact_data.source
                             }
+                            
+                            # Actualizar título si encontramos uno mejor
+                            if contact_data.title and (not domain_info.get("title") or len(contact_data.title) > len(domain_info.get("title", ""))):
+                                domain_info["title"] = contact_data.title
                                 
                         except Exception as e:
-                            # Si falla, dejar el campo de contactos vacío
+                            # Si falla, dejar el campo de contactos con N/A
                             domain_info["contact"] = {
                                 "email": None,
                                 "phone": None,
+                                "title": None,
                                 "linkedin": None,
                                 "instagram": None,
                                 "twitter": None,
@@ -333,7 +341,7 @@ def create_app():
                                 "social_media": [],
                                 "extraction_success": False,
                                 "partial_data": False,
-                                "early_exit": False,
+                                "source": "error",
                                 "error": str(e)
                             }
                         

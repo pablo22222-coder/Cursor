@@ -2,6 +2,10 @@
 requests>=2.31.0
 # Note: wappalyzergo binary is used for tech detection (via subprocess)
 
+# Browser Automation (Contact Extraction)
+playwright>=1.40.0
+# Note: Run 'playwright install chromium' after pip install
+
 # AI/LLM
 google-generativeai>=0.3.0
 
