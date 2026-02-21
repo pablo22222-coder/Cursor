@@ -186,9 +186,20 @@ Prompt: "tiendas online con hubspot y buen seo"
 Responde SOLO con el JSON, nada más.'''
 
     def __init__(self):
-        settings = get_settings()
-        genai.configure(api_key=settings.gemini_api_key)
-        self.model = genai.GenerativeModel(settings.gemini_model)
+        self.settings = get_settings()
+        self.gemini_available = False
+        self.model = None
+        self.last_error = None
+        
+        # Intentar configurar Gemini solo si hay API key
+        if self.settings.is_gemini_configured():
+            try:
+                genai.configure(api_key=self.settings.gemini_api_key)
+                self.model = genai.GenerativeModel(self.settings.gemini_model)
+                self.gemini_available = True
+            except Exception as e:
+                self.last_error = str(e)
+                self.gemini_available = False
     
     def parse(self, prompt: str) -> ParsedPrompt:
         """
@@ -200,6 +211,10 @@ Responde SOLO con el JSON, nada más.'''
         Returns:
             ParsedPrompt con toda la información extraída
         """
+        # Si Gemini no está disponible, usar análisis local directamente
+        if not self.gemini_available or not self.model:
+            return self._local_parse_with_warning(prompt, "GEMINI_API_KEY no configurada")
+        
         try:
             # Construir el prompt para Gemini
             full_prompt = f"{self.SYSTEM_PROMPT}\n\nPROMPT A ANALIZAR:\n{prompt}"
@@ -207,12 +222,48 @@ Responde SOLO con el JSON, nada más.'''
             response = self.model.generate_content(full_prompt)
             json_data = self._parse_response(response.text, prompt)
             
+            # Marcar que fue procesado con Gemini
+            if "notes" not in json_data:
+                json_data["notes"] = []
+            json_data["notes"].append("Análisis realizado con Gemini AI")
+            
             return ParsedPrompt.from_dict(json_data)
             
         except Exception as e:
-            print(f"Error en SemanticParser con Gemini: {e}")
-            # Fallback a análisis local
-            return self._local_parse(prompt)
+            error_msg = str(e)
+            return self._handle_gemini_error(prompt, error_msg)
+    
+    def _handle_gemini_error(self, prompt: str, error_msg: str) -> ParsedPrompt:
+        """Maneja errores de Gemini y decide qué hacer."""
+        
+        # Analizar el tipo de error
+        warning_msg = ""
+        
+        if "403" in error_msg or "leaked" in error_msg.lower():
+            warning_msg = "⚠️ API Key de Gemini bloqueada o inválida. Usando modo de análisis local."
+        elif "429" in error_msg or "quota" in error_msg.lower():
+            warning_msg = "⚠️ Límite de uso de Gemini excedido. Usando modo de análisis local."
+        elif "401" in error_msg or "unauthorized" in error_msg.lower():
+            warning_msg = "⚠️ API Key de Gemini no autorizada. Usando modo de análisis local."
+        elif "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+            warning_msg = "⚠️ Gemini no responde (timeout). Usando modo de análisis local."
+        elif "connection" in error_msg.lower() or "network" in error_msg.lower():
+            warning_msg = "⚠️ Error de conexión con Gemini. Usando modo de análisis local."
+        else:
+            warning_msg = f"⚠️ Error con Gemini API: {error_msg[:100]}. Usando modo de análisis local."
+        
+        print(warning_msg)
+        return self._local_parse_with_warning(prompt, warning_msg)
+    
+    def _local_parse_with_warning(self, prompt: str, warning: str) -> ParsedPrompt:
+        """Ejecuta análisis local y añade advertencia."""
+        result = self._local_parse(prompt)
+        
+        # Limpiar notas duplicadas y añadir advertencia
+        result_dict = result.to_dict()
+        result_dict["notes"] = [warning, "Análisis realizado con parser local (funcionalidad reducida)"]
+        
+        return ParsedPrompt.from_dict(result_dict)
     
     def _parse_response(self, response_text: str, original_prompt: str) -> Dict[str, Any]:
         """Parsea la respuesta de Gemini y valida la estructura."""

@@ -77,9 +77,19 @@ class GeminiInterpreter:
     """Usa Gemini para interpretar y analizar prompts de búsqueda de webs."""
     
     def __init__(self):
-        settings = get_settings()
-        genai.configure(api_key=settings.gemini_api_key)
-        self.model = genai.GenerativeModel(settings.gemini_model)
+        self.settings = get_settings()
+        self.gemini_available = False
+        self.model = None
+        
+        # Intentar configurar Gemini solo si hay API key
+        if self.settings.is_gemini_configured():
+            try:
+                genai.configure(api_key=self.settings.gemini_api_key)
+                self.model = genai.GenerativeModel(self.settings.gemini_model)
+                self.gemini_available = True
+            except Exception as e:
+                print(f"⚠️ No se pudo inicializar Gemini: {e}")
+                self.gemini_available = False
     
     def analyze_prompt(self, prompt: str) -> PromptAnalysis:
         """
@@ -91,6 +101,11 @@ class GeminiInterpreter:
         Returns:
             PromptAnalysis con toda la información extraída
         """
+        # Si Gemini no está disponible, usar análisis local directamente
+        if not self.gemini_available or not self.model:
+            print("ℹ️ Usando análisis local (Gemini no disponible)")
+            return self._basic_analysis(prompt)
+        
         system_prompt = self._build_analysis_prompt(prompt)
         
         try:
@@ -99,9 +114,20 @@ class GeminiInterpreter:
             analysis_data["original_prompt"] = prompt
             return PromptAnalysis(**analysis_data)
         except Exception as e:
-            print(f"Error analizando prompt con Gemini: {e}")
-            # Fallback básico
+            error_msg = str(e)
+            self._handle_gemini_error(error_msg)
             return self._basic_analysis(prompt)
+    
+    def _handle_gemini_error(self, error_msg: str):
+        """Muestra mensaje de error apropiado según el tipo de error."""
+        if "403" in error_msg or "leaked" in error_msg.lower():
+            print("⚠️ API Key de Gemini bloqueada. Usando análisis local.")
+        elif "429" in error_msg or "quota" in error_msg.lower():
+            print("⚠️ Límite de Gemini excedido. Usando análisis local.")
+        elif "401" in error_msg:
+            print("⚠️ API Key de Gemini inválida. Usando análisis local.")
+        else:
+            print(f"⚠️ Error con Gemini: {error_msg[:80]}. Usando análisis local.")
     
     def _build_analysis_prompt(self, user_prompt: str) -> str:
         """Construye el prompt para Gemini."""
