@@ -1,6 +1,8 @@
 """
-Analizador de tecnologías web usando Wappalyzergo.
+Analizador de tecnologías web usando Wappalyzergo (httpx-based).
 Ejecuta el binario wappalyzergo via subprocess y parsea el JSON resultante.
+
+Comando: wappalyzergo -u [URL] -td -json -fr
 
 Wappalyzergo detecta:
 - CMS (WordPress, Joomla, Drupal, etc.)
@@ -9,6 +11,7 @@ Wappalyzergo detecta:
 - Email Marketing (Mailchimp, Klaviyo, etc.)
 - Analytics (Google Analytics, Hotjar, etc.)
 - Frameworks (React, Vue, Angular, etc.)
+- Payment (PayPal, Stripe, etc.)
 - Y muchas más tecnologías...
 """
 import subprocess
@@ -251,6 +254,12 @@ class WappalyzerAnalyzer:
         """
         Analiza las tecnologías de una URL usando wappalyzergo.
         
+        Comando: wappalyzergo -u [URL] -td -json -fr
+        - -u: URL a analizar
+        - -td: Tech detect
+        - -json: Salida en formato JSON
+        - -fr: Follow redirects
+        
         Args:
             url: URL a analizar
             
@@ -265,9 +274,10 @@ class WappalyzerAnalyzer:
         profile = WappalyzerProfile(domain=domain, url=url)
         
         try:
-            # Ejecutar wappalyzergo via subprocess
+            # Ejecutar wappalyzergo via subprocess con nuevos flags
+            # Comando: wappalyzergo -u [URL] -td -json -fr
             result = subprocess.run(
-                [self.wappalyzer_path, "-url", url, "-json"],
+                [self.wappalyzer_path, "-u", url, "-td", "-json", "-fr"],
                 capture_output=True,
                 text=True,
                 timeout=self.timeout
@@ -296,30 +306,66 @@ class WappalyzerAnalyzer:
         return profile
     
     def _parse_wappalyzer_output(self, output: str, profile: WappalyzerProfile):
-        """Parsea la salida JSON de wappalyzergo."""
+        """
+        Parsea la salida JSON de wappalyzergo.
+        
+        Nuevo formato esperado (httpx-based):
+        {"url":"https://example.com","tech":["Varnish","HSTS","PayPal"], ...}
+        
+        La clave "tech" contiene un array de strings con los nombres de las tecnologías.
+        """
         try:
-            # wappalyzergo puede devolver JSON en diferentes formatos
-            data = json.loads(output.strip())
+            # El output puede tener múltiples líneas JSON, tomamos la primera válida
+            lines = output.strip().split('\n')
+            data = None
             
-            # El formato típico es: {"technologies": [...], "urls": {...}}
+            for line in lines:
+                line = line.strip()
+                if line and line.startswith('{'):
+                    try:
+                        data = json.loads(line)
+                        break
+                    except json.JSONDecodeError:
+                        continue
+            
+            if not data:
+                # Intentar parsear todo el output como JSON
+                data = json.loads(output.strip())
+            
+            # Nuevo formato: {"url":"...","tech":["Varnish","HSTS","PayPal"], ...}
             technologies = []
             
             if isinstance(data, dict):
-                if "technologies" in data:
+                # Formato nuevo: tecnologías en la clave "tech" como array de strings
+                if "tech" in data:
+                    tech_list = data["tech"]
+                    if isinstance(tech_list, list):
+                        technologies = tech_list
+                # Formato antiguo: mantener compatibilidad
+                elif "technologies" in data:
                     technologies = data["technologies"]
                 elif "apps" in data:
                     technologies = data["apps"]
-                else:
-                    # Puede ser un dict directo con las tecnologías
-                    for key, value in data.items():
-                        if isinstance(value, dict):
-                            technologies.append({"name": key, **value})
             elif isinstance(data, list):
                 technologies = data
             
             # Procesar cada tecnología
             for tech in technologies:
-                if isinstance(tech, dict):
+                if isinstance(tech, str):
+                    # Nuevo formato: tech es un string directo (ej: "PayPal", "Varnish")
+                    tech_name = tech.strip()
+                    if tech_name:
+                        profile.all_technologies_names.append(tech_name)
+                        
+                        # Crear TechnologyInfo y categorizar por nombre conocido
+                        tech_info = TechnologyInfo(name=tech_name)
+                        profile.technologies.append(tech_info)
+                        
+                        # Categorizar usando el mapeo de tecnologías conocidas
+                        self._categorize_technology_by_name(tech_name, profile)
+                        
+                elif isinstance(tech, dict):
+                    # Formato antiguo: tech es un diccionario
                     name = tech.get("name", tech.get("app", ""))
                     categories = tech.get("categories", [])
                     version = tech.get("version")
@@ -337,8 +383,6 @@ class WappalyzerAnalyzer:
                         
                         # Categorizar
                         self._categorize_technology(tech_info, profile)
-                elif isinstance(tech, str):
-                    profile.all_technologies_names.append(tech)
             
             # Actualizar flags booleanos
             self._update_boolean_flags(profile)
@@ -361,11 +405,278 @@ class WappalyzerAnalyzer:
                     target_list.append(tech.name)
         
         # Categorizar por nombre conocido
+        self._categorize_technology_by_name(tech.name, profile)
+    
+    def _categorize_technology_by_name(self, tech_name: str, profile: WappalyzerProfile):
+        """
+        Categoriza una tecnología basándose solo en su nombre.
+        Usado para el nuevo formato donde solo tenemos el nombre de la tecnología.
+        """
+        tech_name_lower = tech_name.lower()
+        
+        # Mapeo extendido de nombres de tecnología a categorías
+        # Incluye variaciones y nombres exactos
+        TECH_NAME_TO_CATEGORY = {
+            # Payment
+            "paypal": "payment",
+            "stripe": "payment",
+            "square": "payment",
+            "braintree": "payment",
+            "adyen": "payment",
+            "klarna": "payment",
+            "afterpay": "payment",
+            "affirm": "payment",
+            "redsys": "payment",
+            "bizum": "payment",
+            "mollie": "payment",
+            "worldpay": "payment",
+            "checkout.com": "payment",
+            "razorpay": "payment",
+            "mercadopago": "payment",
+            "mercado pago": "payment",
+            "apple pay": "payment",
+            "google pay": "payment",
+            "amazon pay": "payment",
+            "shopify payments": "payment",
+            "wepay": "payment",
+            "2checkout": "payment",
+            "authorize.net": "payment",
+            "payu": "payment",
+            "skrill": "payment",
+            
+            # CRM
+            "hubspot": "crm",
+            "salesforce": "crm",
+            "zoho": "crm",
+            "pipedrive": "crm",
+            "freshsales": "crm",
+            "copper": "crm",
+            "monday": "crm",
+            "close": "crm",
+            "insightly": "crm",
+            "nimble": "crm",
+            "zendesk sell": "crm",
+            "microsoft dynamics": "crm",
+            "sugarcrm": "crm",
+            "vtiger": "crm",
+            "odoo": "crm",
+            "agile crm": "crm",
+            "capsule": "crm",
+            "keap": "crm",
+            "infusionsoft": "crm",
+            
+            # Email Marketing
+            "mailchimp": "email_marketing",
+            "klaviyo": "email_marketing",
+            "activecampaign": "email_marketing",
+            "convertkit": "email_marketing",
+            "sendinblue": "email_marketing",
+            "brevo": "email_marketing",
+            "getresponse": "email_marketing",
+            "drip": "email_marketing",
+            "constant contact": "email_marketing",
+            "aweber": "email_marketing",
+            "omnisend": "email_marketing",
+            "moosend": "email_marketing",
+            "mailerlite": "email_marketing",
+            "campaign monitor": "email_marketing",
+            "sendgrid": "email_marketing",
+            "mailjet": "email_marketing",
+            "emma": "email_marketing",
+            "dotdigital": "email_marketing",
+            
+            # Live Chat
+            "intercom": "live_chat",
+            "drift": "live_chat",
+            "crisp": "live_chat",
+            "zendesk chat": "live_chat",
+            "zendesk": "live_chat",
+            "tidio": "live_chat",
+            "tawk.to": "live_chat",
+            "tawk": "live_chat",
+            "livechat": "live_chat",
+            "freshchat": "live_chat",
+            "olark": "live_chat",
+            "chatra": "live_chat",
+            "userlike": "live_chat",
+            "smartsupp": "live_chat",
+            "customerly": "live_chat",
+            "helpcrunch": "live_chat",
+            "gorgias": "live_chat",
+            "zopim": "live_chat",
+            "purechat": "live_chat",
+            "jivochat": "live_chat",
+            "chaport": "live_chat",
+            "comm100": "live_chat",
+            
+            # Analytics
+            "google analytics": "analytics",
+            "google tag manager": "analytics",
+            "gtm": "analytics",
+            "ga4": "analytics",
+            "hotjar": "analytics",
+            "mixpanel": "analytics",
+            "amplitude": "analytics",
+            "heap": "analytics",
+            "fullstory": "analytics",
+            "mouseflow": "analytics",
+            "crazy egg": "analytics",
+            "microsoft clarity": "analytics",
+            "clarity": "analytics",
+            "smartlook": "analytics",
+            "matomo": "analytics",
+            "plausible": "analytics",
+            "fathom": "analytics",
+            "segment": "analytics",
+            "piwik": "analytics",
+            "clicky": "analytics",
+            "statcounter": "analytics",
+            "woopra": "analytics",
+            "kissmetrics": "analytics",
+            
+            # Ecommerce
+            "shopify": "ecommerce",
+            "woocommerce": "ecommerce",
+            "magento": "ecommerce",
+            "prestashop": "ecommerce",
+            "bigcommerce": "ecommerce",
+            "opencart": "ecommerce",
+            "vtex": "ecommerce",
+            "salesforce commerce": "ecommerce",
+            "sap commerce": "ecommerce",
+            "wix stores": "ecommerce",
+            "squarespace commerce": "ecommerce",
+            "ecwid": "ecommerce",
+            "volusion": "ecommerce",
+            "3dcart": "ecommerce",
+            "nopcommerce": "ecommerce",
+            "cs-cart": "ecommerce",
+            "oscommerce": "ecommerce",
+            "zen cart": "ecommerce",
+            "x-cart": "ecommerce",
+            
+            # CMS
+            "wordpress": "cms",
+            "joomla": "cms",
+            "drupal": "cms",
+            "wix": "cms",
+            "squarespace": "cms",
+            "webflow": "cms",
+            "ghost": "cms",
+            "contentful": "cms",
+            "strapi": "cms",
+            "sanity": "cms",
+            "prismic": "cms",
+            "typo3": "cms",
+            "sitecore": "cms",
+            "kentico": "cms",
+            "umbraco": "cms",
+            "hubspot cms": "cms",
+            "concrete5": "cms",
+            "craft cms": "cms",
+            "blogger": "cms",
+            "medium": "cms",
+            
+            # Frameworks
+            "react": "frameworks",
+            "vue": "frameworks",
+            "vue.js": "frameworks",
+            "angular": "frameworks",
+            "next.js": "frameworks",
+            "nuxt": "frameworks",
+            "nuxt.js": "frameworks",
+            "gatsby": "frameworks",
+            "svelte": "frameworks",
+            "ember": "frameworks",
+            "backbone": "frameworks",
+            "jquery": "javascript_libraries",
+            "bootstrap": "frameworks",
+            "tailwind": "frameworks",
+            "tailwindcss": "frameworks",
+            "foundation": "frameworks",
+            "bulma": "frameworks",
+            "materialize": "frameworks",
+            
+            # CDN
+            "cloudflare": "cdn",
+            "akamai": "cdn",
+            "fastly": "cdn",
+            "amazon cloudfront": "cdn",
+            "cloudfront": "cdn",
+            "keycdn": "cdn",
+            "stackpath": "cdn",
+            "bunnycdn": "cdn",
+            "jsdelivr": "cdn",
+            "unpkg": "cdn",
+            
+            # Hosting
+            "aws": "hosting",
+            "amazon web services": "hosting",
+            "google cloud": "hosting",
+            "azure": "hosting",
+            "vercel": "hosting",
+            "netlify": "hosting",
+            "heroku": "hosting",
+            "digitalocean": "hosting",
+            "linode": "hosting",
+            "godaddy": "hosting",
+            "bluehost": "hosting",
+            "siteground": "hosting",
+            "wpengine": "hosting",
+            "kinsta": "hosting",
+            "flywheel": "hosting",
+            
+            # Security
+            "hsts": "security",
+            "cloudflare bot management": "security",
+            "recaptcha": "security",
+            "hcaptcha": "security",
+            "auth0": "security",
+            "okta": "security",
+            "onelogin": "security",
+            "let's encrypt": "security",
+            "comodo": "security",
+            "digicert": "security",
+            
+            # Marketing Automation
+            "marketo": "marketing_automation",
+            "pardot": "marketing_automation",
+            "eloqua": "marketing_automation",
+            "autopilot": "marketing_automation",
+            "sharpspring": "marketing_automation",
+            "act-on": "marketing_automation",
+            
+            # Customer Support
+            "freshdesk": "customer_support",
+            "helpscout": "customer_support",
+            "help scout": "customer_support",
+            "kayako": "customer_support",
+            "desk.com": "customer_support",
+        }
+        
+        # Buscar coincidencia exacta primero
+        if tech_name_lower in TECH_NAME_TO_CATEGORY:
+            category = TECH_NAME_TO_CATEGORY[tech_name_lower]
+            target_list = getattr(profile, category, None)
+            if target_list is not None and tech_name not in target_list:
+                target_list.append(tech_name)
+            return
+        
+        # Buscar coincidencia parcial
+        for known_tech, category in TECH_NAME_TO_CATEGORY.items():
+            if known_tech in tech_name_lower or tech_name_lower in known_tech:
+                target_list = getattr(profile, category, None)
+                if target_list is not None and tech_name not in target_list:
+                    target_list.append(tech_name)
+                return
+        
+        # Buscar en KNOWN_TECHNOLOGIES como fallback
         for category, known_techs in self.KNOWN_TECHNOLOGIES.items():
             if any(known in tech_name_lower for known in known_techs):
                 target_list = getattr(profile, category, None)
-                if target_list is not None and tech.name not in target_list:
-                    target_list.append(tech.name)
+                if target_list is not None and tech_name not in target_list:
+                    target_list.append(tech_name)
+                return
     
     def _update_boolean_flags(self, profile: WappalyzerProfile):
         """Actualiza los flags booleanos basándose en las listas."""
