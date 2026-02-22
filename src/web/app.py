@@ -289,44 +289,35 @@ def create_app():
                 
                 search_state["progress"] = 90
                 
-                # === FASE 3: Extraer datos de contacto con Playwright ===
+                # === FASE 3: Extraer datos de contacto con Playwright (Efectividad Extrema) ===
                 if extract_contacts and final_results:
-                    search_state["status"] = "Fase 3: Extrayendo datos de contacto..."
-                    print(f"[Fase 3] Iniciando extracción de contactos para {len(final_results)} dominios")
+                    search_state["status"] = "Fase 3: Extrayendo emails y teléfonos..."
+                    print(f"[Fase 3] Iniciando extracción para {len(final_results)} dominios")
                     
                     total_contacts = len(final_results)
                     for i, domain_info in enumerate(final_results):
                         domain_url = domain_info["url"]
-                        print(f"[Fase 3] Procesando {i+1}/{total_contacts}: {domain_url}")
-                        search_state["status"] = f"Fase 3: Contactos {i+1}/{total_contacts}..."
+                        print(f"[Fase 3] {i+1}/{total_contacts}: {domain_url}")
+                        search_state["status"] = f"Fase 3: Extrayendo {i+1}/{total_contacts}..."
                         
                         try:
-                            # Crear nuevo extractor para cada dominio (evita problemas de estado)
+                            # Crear nuevo extractor para cada dominio
                             extractor = ContactExtractor(timeout=CONTACT_EXTRACTION_TIMEOUT)
                             
-                            # Extracción con Playwright (campos dinámicos)
-                            contact_data = extractor.extract(
-                                domain_url,
-                                fields=['email', 'phone', 'social', 'title']
-                            )
+                            # Extracción con navegación en cascada
+                            contact_data = extractor.extract(domain_url)
                             
-                            print(f"[Fase 3] {domain_url} -> email={contact_data.email}, social={len(contact_data.social_media)}")
+                            print(f"[Fase 3] {domain_info['domain']} -> email={contact_data.email}, phone={contact_data.phone}, source={contact_data.source}")
                             
                             # Añadir datos de contacto al resultado
                             domain_info["contact"] = {
                                 "email": contact_data.email,
                                 "phone": contact_data.phone,
-                                "title": contact_data.title,
-                                "linkedin": contact_data.linkedin,
-                                "instagram": contact_data.instagram,
-                                "twitter": contact_data.twitter,
-                                "facebook": contact_data.facebook,
-                                "youtube": contact_data.youtube,
-                                "tiktok": contact_data.tiktok,
-                                "social_media": contact_data.social_media,
+                                "all_emails": contact_data.all_emails,
+                                "all_phones": contact_data.all_phones,
                                 "extraction_success": contact_data.extraction_success,
-                                "partial_data": contact_data.partial_data,
-                                "source": contact_data.source
+                                "source": contact_data.source,
+                                "pages_visited": len(contact_data.pages_visited)
                             }
                             
                             # Actualizar título si encontramos uno mejor
@@ -335,21 +326,14 @@ def create_app():
                                 
                         except Exception as e:
                             print(f"[Fase 3] ERROR en {domain_url}: {str(e)}")
-                            # Si falla, dejar el campo de contactos con N/A
                             domain_info["contact"] = {
                                 "email": None,
                                 "phone": None,
-                                "title": None,
-                                "linkedin": None,
-                                "instagram": None,
-                                "twitter": None,
-                                "facebook": None,
-                                "youtube": None,
-                                "tiktok": None,
-                                "social_media": [],
+                                "all_emails": [],
+                                "all_phones": [],
                                 "extraction_success": False,
-                                "partial_data": False,
                                 "source": "error",
+                                "pages_visited": 0,
                                 "error": str(e)
                             }
                         
@@ -357,9 +341,8 @@ def create_app():
                         progress = 90 + int(((i + 1) / total_contacts) * 10)
                         search_state["progress"] = min(progress, 99)
                     
-                    print(f"[Fase 3] Completada extracción de contactos")
+                    print(f"[Fase 3] Extracción completada")
                 else:
-                    # Si no se extraen contactos, añadir estructura vacía
                     for domain_info in final_results:
                         domain_info["contact"] = None
                 
@@ -444,29 +427,35 @@ def create_app():
             output = io.StringIO()
             writer = csv.writer(output)
             
-            # Headers con datos de contacto
+            # Headers simplificados (email + teléfono)
             headers = [
                 'Dominio', 'URL', 'Confianza', 'Título',
-                'Email', 'Teléfono', 
-                'LinkedIn', 'Instagram', 'Twitter', 'Facebook', 'YouTube', 'TikTok'
+                'Email', 'Teléfono', 'Emails_Adicionales', 'Teléfonos_Adicionales'
             ]
             writer.writerow(headers)
             
             for r in search_state["results"]:
                 contact = r.get('contact', {}) or {}
+                
+                # Emails adicionales (sin el principal)
+                all_emails = contact.get('all_emails', []) or []
+                main_email = contact.get('email', '')
+                extra_emails = [e for e in all_emails if e != main_email]
+                
+                # Teléfonos adicionales (sin el principal)
+                all_phones = contact.get('all_phones', []) or []
+                main_phone = contact.get('phone', '')
+                extra_phones = [p for p in all_phones if p != main_phone]
+                
                 row = [
                     r['domain'],
                     r['url'],
                     r['confidence'],
                     r.get('title', ''),
-                    contact.get('email', '') or '',
-                    contact.get('phone', '') or '',
-                    contact.get('linkedin', '') or '',
-                    contact.get('instagram', '') or '',
-                    contact.get('twitter', '') or '',
-                    contact.get('facebook', '') or '',
-                    contact.get('youtube', '') or '',
-                    contact.get('tiktok', '') or ''
+                    main_email or 'N/A',
+                    main_phone or 'N/A',
+                    '; '.join(extra_emails) if extra_emails else '',
+                    '; '.join(extra_phones) if extra_phones else ''
                 ]
                 writer.writerow(row)
             
