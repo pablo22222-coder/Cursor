@@ -16,10 +16,21 @@ from typing import List, Dict, Any, Optional, Set
 from urllib.parse import urlparse, urljoin
 
 try:
-    from playwright.async_api import async_playwright, Page, Browser, TimeoutError as PlaywrightTimeout
+    from playwright.async_api import async_playwright, Page, Browser, BrowserContext, TimeoutError as PlaywrightTimeout
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
+
+# User-Agent real de Chrome
+CHROME_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+# Args para Codespaces/Docker
+BROWSER_ARGS = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu'
+]
 
 
 @dataclass
@@ -139,33 +150,56 @@ class ContactExtractor:
         self.timeout = timeout
         self.headless = headless
         self._browser: Optional[Browser] = None
+        self._context: Optional[BrowserContext] = None
         self._playwright = None
     
     async def _init_browser(self):
-        """Inicializa el navegador con modo sigilo."""
+        """Inicializa el navegador con modo sigilo y args para Codespaces."""
         if not PLAYWRIGHT_AVAILABLE:
             raise ImportError("Playwright no está instalado. Ejecuta: pip install playwright && playwright install chromium")
         
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(headless=self.headless)
+        self._browser = await self._playwright.chromium.launch(
+            headless=self.headless,
+            args=BROWSER_ARGS
+        )
     
     async def _close_browser(self):
-        """Cierra el navegador."""
-        if self._browser:
-            await self._browser.close()
-        if self._playwright:
-            await self._playwright.stop()
+        """Cierra el navegador y libera memoria."""
+        try:
+            if self._context:
+                await self._context.close()
+                self._context = None
+        except:
+            pass
+        
+        try:
+            if self._browser:
+                await self._browser.close()
+                self._browser = None
+        except:
+            pass
+        
+        try:
+            if self._playwright:
+                await self._playwright.stop()
+                self._playwright = None
+        except:
+            pass
     
     async def _create_stealth_page(self) -> Page:
         """
         Crea una página en modo sigilo (sin imágenes, CSS, fuentes).
+        User-Agent real de Chrome para evitar detección.
         """
-        context = await self._browser.new_context(
-            viewport={'width': 1280, 'height': 720},
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        self._context = await self._browser.new_context(
+            viewport={'width': 1920, 'height': 1080},
+            user_agent=CHROME_USER_AGENT,
+            locale='es-ES',
+            timezone_id='Europe/Madrid'
         )
         
-        page = await context.new_page()
+        page = await self._context.new_page()
         
         # Bloquear recursos innecesarios para máxima velocidad
         await page.route("**/*", lambda route: (
@@ -175,6 +209,20 @@ class ContactExtractor:
         
         return page
     
+    async def _quick_scroll(self, page: Page):
+        """
+        Scroll rápido para cargar contenido lazy-loaded.
+        Baja hasta el footer y vuelve arriba.
+        """
+        try:
+            # Scroll hasta abajo
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await asyncio.sleep(0.5)
+            # Scroll hasta arriba
+            await page.evaluate("window.scrollTo(0, 0)")
+        except:
+            pass
+
     async def extract_async(self, url: str, fields: List[str] = None) -> ContactData:
         """
         Extrae datos de contacto de una URL.
@@ -229,10 +277,16 @@ class ContactExtractor:
                     except:
                         pass
                 
-                # Extraer del HTML completo primero
+                # Scroll rápido para cargar contenido lazy
+                await self._quick_scroll(page)
+                
+                # Esperar 2 segundos para que cargue contenido dinámico
+                await asyncio.sleep(2)
+                
+                # Extraer del HTML completo
                 html = await page.content()
                 
-                # Buscar en footer específicamente
+                # Buscar en footer específicamente (90% de contactos están ahí)
                 footer_html = await self._get_footer_content(page)
                 if footer_html:
                     self._extract_from_html(footer_html, found_data, search_email, search_phone, search_social)
@@ -253,6 +307,10 @@ class ContactExtractor:
                             response = await page.goto(contact_url, wait_until='domcontentloaded', timeout=8000)
                             
                             if response and response.ok:
+                                # Scroll y espera en página de contacto
+                                await self._quick_scroll(page)
+                                await asyncio.sleep(1)
+                                
                                 contact_html = await page.content()
                                 self._extract_from_html(contact_html, found_data, search_email, search_phone, search_social)
                                 
@@ -267,14 +325,19 @@ class ContactExtractor:
                 contact.error_message = f"Timeout ({self.timeout}s)"
             except Exception as e:
                 contact.error_message = f"Error navegación: {str(e)[:100]}"
-            
-            await page.close()
+            finally:
+                # Cerrar página
+                try:
+                    await page.close()
+                except:
+                    pass
             
         except ImportError as e:
             contact.error_message = str(e)
         except Exception as e:
             contact.error_message = f"Error: {str(e)[:100]}"
         finally:
+            # SIEMPRE cerrar browser para liberar memoria
             await self._close_browser()
         
         # Transferir datos
