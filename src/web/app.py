@@ -31,6 +31,7 @@ from src.domain_validator.validator import DomainValidator
 from src.web_analyzer.wappalyzer_analyzer import WappalyzerAnalyzer
 from src.web_analyzer.contact_extractor import ContactExtractor
 from src.web_analyzer.domain_analyzer import DomainAnalyzer
+from src.web_analyzer.parallel_analyzer import analyze_domains_parallel, MAX_DOMAINS as PARALLEL_MAX_DOMAINS
 from src.utils.helpers import export_to_json, export_to_csv
 
 # Timeout para fallback sin filtro de tecnología (segundos)
@@ -79,7 +80,7 @@ def create_app():
     
     @app.route('/inspect/<path:domain>')
     def inspect(domain):
-        """Página de inspección de un dominio."""
+        """Página de inspección de un dominio - Ficha técnica profesional."""
         # Buscar resultado en analyzer_state
         result = None
         for r in analyzer_state["results"]:
@@ -88,11 +89,10 @@ def create_app():
                 break
         
         if not result:
-            # Si no está en memoria, hacer análisis en tiempo real
+            # Si no está en memoria, hacer análisis en tiempo real con parallel analyzer
             try:
-                analyzer = DomainAnalyzer()
-                analysis = analyzer.analyze_sync(domain)
-                result = analysis.to_dict()
+                results = analyze_domains_parallel([domain])
+                result = results[0] if results else {"domain": domain, "error": "No results", "success": False}
             except Exception as e:
                 result = {"domain": domain, "error": str(e), "success": False}
         
@@ -100,7 +100,7 @@ def create_app():
     
     @app.route('/api/analyzer/start', methods=['POST'])
     def start_analyzer():
-        """Inicia análisis masivo de dominios."""
+        """Inicia análisis masivo de dominios con 3 workers paralelos."""
         if analyzer_state["is_analyzing"]:
             return jsonify({"error": "Ya hay un análisis en progreso"}), 400
         
@@ -110,44 +110,28 @@ def create_app():
         if not domains:
             return jsonify({"error": "No se proporcionaron dominios"}), 400
         
-        # Limitar a MAX_ANALYZER_DOMAINS
-        domains = domains[:MAX_ANALYZER_DOMAINS]
+        # Limitar a 30 dominios (REGLA DE NEGOCIO ESTRICTA)
+        domains = [d.strip() for d in domains if d.strip()][:PARALLEL_MAX_DOMAINS]
         
-        def run_analysis():
+        def on_progress(progress, status, completed, total):
+            """Callback para actualizar progreso en tiempo real."""
+            analyzer_state["progress"] = progress
+            analyzer_state["status"] = status
+            analyzer_state["detail"] = f"{completed} / {total} dominios (3 workers)"
+        
+        def run_parallel_analysis():
             analyzer_state["is_analyzing"] = True
             analyzer_state["progress"] = 0
-            analyzer_state["status"] = "Iniciando análisis..."
+            analyzer_state["status"] = "Iniciando 3 workers..."
             analyzer_state["detail"] = f"0 / {len(domains)} dominios"
             analyzer_state["results"] = []
             
             try:
-                total = len(domains)
+                # Análisis paralelo con 3 workers
+                results = analyze_domains_parallel(domains, on_progress=on_progress)
+                analyzer_state["results"] = results
                 
-                for i, domain in enumerate(domains):
-                    domain = domain.strip()
-                    if not domain:
-                        continue
-                    
-                    analyzer_state["current_domain"] = domain
-                    analyzer_state["status"] = f"Analizando {domain}..."
-                    analyzer_state["detail"] = f"{i + 1} / {total} dominios"
-                    
-                    try:
-                        analyzer = DomainAnalyzer()
-                        result = analyzer.analyze_sync(domain)
-                        analyzer_state["results"].append(result.to_dict())
-                    except Exception as e:
-                        analyzer_state["results"].append({
-                            "domain": domain,
-                            "url": f"https://{domain}",
-                            "success": False,
-                            "error": str(e)
-                        })
-                    
-                    # Update progress
-                    analyzer_state["progress"] = int(((i + 1) / total) * 100)
-                
-                analyzer_state["status"] = f"Completado: {len(analyzer_state['results'])} dominios analizados"
+                analyzer_state["status"] = f"✓ {len(results)} dominios analizados"
                 analyzer_state["progress"] = 100
                 
             except Exception as e:
@@ -156,10 +140,14 @@ def create_app():
             finally:
                 analyzer_state["is_analyzing"] = False
         
-        thread = threading.Thread(target=run_analysis)
+        thread = threading.Thread(target=run_parallel_analysis)
         thread.start()
         
-        return jsonify({"message": "Análisis iniciado", "domains": len(domains)})
+        return jsonify({
+            "message": "Análisis iniciado con 3 workers",
+            "domains": len(domains),
+            "max_domains": PARALLEL_MAX_DOMAINS
+        })
     
     @app.route('/api/analyzer/status')
     def analyzer_status():
