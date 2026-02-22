@@ -30,12 +30,15 @@ from src.web_search.serper_search import SerperSearch
 from src.domain_validator.validator import DomainValidator
 from src.web_analyzer.wappalyzer_analyzer import WappalyzerAnalyzer
 from src.web_analyzer.contact_extractor import ContactExtractor
+from src.web_analyzer.domain_analyzer import DomainAnalyzer
 from src.utils.helpers import export_to_json, export_to_csv
 
 # Timeout para fallback sin filtro de tecnología (segundos)
 TECHNOLOGY_FILTER_TIMEOUT = 180
 # Timeout para extracción de contactos con Playwright (segundos)
 CONTACT_EXTRACTION_TIMEOUT = 45
+# Máximo de dominios para análisis masivo
+MAX_ANALYZER_DOMAINS = 30
 
 
 def create_app():
@@ -54,10 +57,128 @@ def create_app():
         "analysis": None
     }
     
+    # Estado global para análisis de dominios
+    analyzer_state = {
+        "is_analyzing": False,
+        "progress": 0,
+        "status": "",
+        "detail": "",
+        "results": [],
+        "current_domain": ""
+    }
+    
     @app.route('/')
     def index():
         """Página principal."""
         return render_template('index.html')
+    
+    @app.route('/analyzer')
+    def analyzer():
+        """Página del analizador de dominios."""
+        return render_template('analyzer.html')
+    
+    @app.route('/inspect/<path:domain>')
+    def inspect(domain):
+        """Página de inspección de un dominio."""
+        # Buscar resultado en analyzer_state
+        result = None
+        for r in analyzer_state["results"]:
+            if r.get("domain") == domain:
+                result = r
+                break
+        
+        if not result:
+            # Si no está en memoria, hacer análisis en tiempo real
+            try:
+                analyzer = DomainAnalyzer()
+                analysis = analyzer.analyze_sync(domain)
+                result = analysis.to_dict()
+            except Exception as e:
+                result = {"domain": domain, "error": str(e), "success": False}
+        
+        return render_template('inspect.html', domain=domain, data=result)
+    
+    @app.route('/api/analyzer/start', methods=['POST'])
+    def start_analyzer():
+        """Inicia análisis masivo de dominios."""
+        if analyzer_state["is_analyzing"]:
+            return jsonify({"error": "Ya hay un análisis en progreso"}), 400
+        
+        data = request.json
+        domains = data.get('domains', [])
+        
+        if not domains:
+            return jsonify({"error": "No se proporcionaron dominios"}), 400
+        
+        # Limitar a MAX_ANALYZER_DOMAINS
+        domains = domains[:MAX_ANALYZER_DOMAINS]
+        
+        def run_analysis():
+            analyzer_state["is_analyzing"] = True
+            analyzer_state["progress"] = 0
+            analyzer_state["status"] = "Iniciando análisis..."
+            analyzer_state["detail"] = f"0 / {len(domains)} dominios"
+            analyzer_state["results"] = []
+            
+            try:
+                total = len(domains)
+                
+                for i, domain in enumerate(domains):
+                    domain = domain.strip()
+                    if not domain:
+                        continue
+                    
+                    analyzer_state["current_domain"] = domain
+                    analyzer_state["status"] = f"Analizando {domain}..."
+                    analyzer_state["detail"] = f"{i + 1} / {total} dominios"
+                    
+                    try:
+                        analyzer = DomainAnalyzer()
+                        result = analyzer.analyze_sync(domain)
+                        analyzer_state["results"].append(result.to_dict())
+                    except Exception as e:
+                        analyzer_state["results"].append({
+                            "domain": domain,
+                            "url": f"https://{domain}",
+                            "success": False,
+                            "error": str(e)
+                        })
+                    
+                    # Update progress
+                    analyzer_state["progress"] = int(((i + 1) / total) * 100)
+                
+                analyzer_state["status"] = f"Completado: {len(analyzer_state['results'])} dominios analizados"
+                analyzer_state["progress"] = 100
+                
+            except Exception as e:
+                analyzer_state["status"] = f"Error: {str(e)}"
+                analyzer_state["progress"] = 100
+            finally:
+                analyzer_state["is_analyzing"] = False
+        
+        thread = threading.Thread(target=run_analysis)
+        thread.start()
+        
+        return jsonify({"message": "Análisis iniciado", "domains": len(domains)})
+    
+    @app.route('/api/analyzer/status')
+    def analyzer_status():
+        """Estado del análisis en curso."""
+        return jsonify({
+            "is_analyzing": analyzer_state["is_analyzing"],
+            "progress": analyzer_state["progress"],
+            "status": analyzer_state["status"],
+            "detail": analyzer_state["detail"],
+            "current_domain": analyzer_state["current_domain"],
+            "results_count": len(analyzer_state["results"])
+        })
+    
+    @app.route('/api/analyzer/results')
+    def analyzer_results():
+        """Resultados del análisis."""
+        return jsonify({
+            "results": analyzer_state["results"]
+        })
     
     @app.route('/api/search', methods=['POST'])
     def search():
