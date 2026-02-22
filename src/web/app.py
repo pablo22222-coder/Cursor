@@ -523,6 +523,99 @@ def create_app():
         
         return jsonify({"error": "Formato no soportado"}), 400
     
+    @app.route('/api/export/marketing')
+    def export_marketing_csv():
+        """
+        Endpoint para exportar CSV personalizado para herramientas de marketing.
+        Compatible con Mailchimp, HubSpot, ActiveCampaign, Brevo, etc.
+        
+        Query params:
+        - fields: comma-separated list of fields (domain,url,email,phone,social)
+        """
+        import csv
+        import io
+        
+        # Get requested fields
+        fields_param = request.args.get('fields', '')
+        requested_fields = [f.strip() for f in fields_param.split(',') if f.strip()]
+        
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # Si no hay campos, devolver CSV vacío (solo headers vacíos)
+        if not requested_fields:
+            writer.writerow([])
+            return Response(
+                output.getvalue(),
+                mimetype='text/csv',
+                headers={'Content-Disposition': 'attachment;filename=leads_marketing.csv'}
+            )
+        
+        # Build headers based on selected fields
+        # Use marketing-friendly column names
+        headers = []
+        if 'domain' in requested_fields:
+            headers.append('Domain')
+        if 'url' in requested_fields:
+            headers.append('Website')
+        if 'email' in requested_fields:
+            headers.append('Email')
+        if 'phone' in requested_fields:
+            headers.append('Phone')
+        if 'social' in requested_fields:
+            headers.extend(['LinkedIn', 'Instagram', 'Twitter', 'Facebook', 'YouTube', 'TikTok'])
+        
+        writer.writerow(headers)
+        
+        # Write data rows
+        for r in search_state["results"]:
+            contact = r.get('contact', {}) or {}
+            row = []
+            
+            if 'domain' in requested_fields:
+                row.append(r.get('domain', ''))
+            
+            if 'url' in requested_fields:
+                row.append(r.get('url', ''))
+            
+            if 'email' in requested_fields:
+                email = contact.get('email', '')
+                row.append(email if email else '')
+            
+            if 'phone' in requested_fields:
+                phone = contact.get('phone', '')
+                row.append(phone if phone else '')
+            
+            if 'social' in requested_fields:
+                social_media = contact.get('social_media', []) or []
+                social_by_platform = {
+                    'linkedin': '', 'instagram': '', 'twitter': '',
+                    'facebook': '', 'youtube': '', 'tiktok': ''
+                }
+                
+                for sm in social_media:
+                    platform = sm.get('platform', '')
+                    url = sm.get('url', '')
+                    if platform in social_by_platform:
+                        social_by_platform[platform] = url
+                
+                row.extend([
+                    social_by_platform['linkedin'],
+                    social_by_platform['instagram'],
+                    social_by_platform['twitter'],
+                    social_by_platform['facebook'],
+                    social_by_platform['youtube'],
+                    social_by_platform['tiktok']
+                ])
+            
+            writer.writerow(row)
+        
+        return Response(
+            output.getvalue(),
+            mimetype='text/csv',
+            headers={'Content-Disposition': 'attachment;filename=leads_marketing.csv'}
+        )
+    
     return app
 
 

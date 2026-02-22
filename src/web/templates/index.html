@@ -190,10 +190,16 @@
                 </div>
                 <div class="flex gap-3">
                     <button onclick="exportResults('json')" class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-                        Exportar JSON
+                        JSON
                     </button>
                     <button onclick="exportResults('csv')" class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-                        Exportar CSV
+                        CSV
+                    </button>
+                    <button onclick="openExportModal()" class="px-4 py-2 text-sm font-medium text-white bg-gradient-to-r from-green-500 to-emerald-600 rounded-lg hover:from-green-600 hover:to-emerald-700 transition-all shadow-md flex items-center gap-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                        </svg>
+                        Descargar para Marketing
                     </button>
                 </div>
             </div>
@@ -237,6 +243,121 @@
     <footer class="max-w-6xl mx-auto px-6 py-8 text-center text-sm text-gray-400">
         Domain Finder v1.0 — Búsqueda inteligente de dominios
     </footer>
+
+    <!-- Export Modal -->
+    <div id="export-modal" class="hidden fixed inset-0 z-50 overflow-y-auto">
+        <!-- Backdrop -->
+        <div class="fixed inset-0 bg-black/50 backdrop-blur-sm" onclick="closeExportModal()"></div>
+        
+        <!-- Modal Content -->
+        <div class="relative min-h-screen flex items-center justify-center p-4">
+            <div class="relative bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 animate-modal">
+                <!-- Header -->
+                <div class="flex items-center justify-between mb-6">
+                    <div>
+                        <h3 class="text-lg font-semibold text-gray-900">Descargar CSV para Marketing</h3>
+                        <p class="text-sm text-gray-500 mt-1">Selecciona los datos que quieres exportar</p>
+                    </div>
+                    <button onclick="closeExportModal()" class="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+                
+                <!-- Options -->
+                <div class="space-y-3 mb-6">
+                    <label class="flex items-center gap-3 p-3 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition-colors group">
+                        <input type="checkbox" id="export-dominio" checked class="w-5 h-5 text-primary-600 rounded focus:ring-primary-500">
+                        <div class="flex-1">
+                            <span class="font-medium text-gray-900">Dominio</span>
+                            <p class="text-xs text-gray-500">ejemplo.com</p>
+                        </div>
+                        <svg class="w-5 h-5 text-gray-400 group-hover:text-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"></path>
+                        </svg>
+                    </label>
+                    
+                    <label class="flex items-center gap-3 p-3 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition-colors group">
+                        <input type="checkbox" id="export-url" class="w-5 h-5 text-primary-600 rounded focus:ring-primary-500">
+                        <div class="flex-1">
+                            <span class="font-medium text-gray-900">URL Completa</span>
+                            <p class="text-xs text-gray-500">https://ejemplo.com</p>
+                        </div>
+                        <svg class="w-5 h-5 text-gray-400 group-hover:text-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"></path>
+                        </svg>
+                    </label>
+                    
+                    <label class="flex items-center gap-3 p-3 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition-colors group">
+                        <input type="checkbox" id="export-email-csv" checked class="w-5 h-5 text-primary-600 rounded focus:ring-primary-500">
+                        <div class="flex-1">
+                            <span class="font-medium text-gray-900">Email</span>
+                            <p class="text-xs text-gray-500">contacto@ejemplo.com</p>
+                        </div>
+                        <svg class="w-5 h-5 text-gray-400 group-hover:text-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
+                        </svg>
+                    </label>
+                    
+                    <label class="flex items-center gap-3 p-3 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition-colors group">
+                        <input type="checkbox" id="export-phone-csv" class="w-5 h-5 text-primary-600 rounded focus:ring-primary-500">
+                        <div class="flex-1">
+                            <span class="font-medium text-gray-900">Teléfono</span>
+                            <p class="text-xs text-gray-500">+34 612 345 678</p>
+                        </div>
+                        <svg class="w-5 h-5 text-gray-400 group-hover:text-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"></path>
+                        </svg>
+                    </label>
+                    
+                    <label class="flex items-center gap-3 p-3 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition-colors group">
+                        <input type="checkbox" id="export-social-csv" class="w-5 h-5 text-primary-600 rounded focus:ring-primary-500">
+                        <div class="flex-1">
+                            <span class="font-medium text-gray-900">Redes Sociales</span>
+                            <p class="text-xs text-gray-500">LinkedIn, Instagram, Twitter...</p>
+                        </div>
+                        <svg class="w-5 h-5 text-gray-400 group-hover:text-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a1.994 1.994 0 01-1.414-.586m0 0L11 14h4a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2v4l.586-.586z"></path>
+                        </svg>
+                    </label>
+                </div>
+                
+                <!-- Quick Actions -->
+                <div class="flex gap-2 mb-6">
+                    <button onclick="selectAllExport()" class="flex-1 px-3 py-2 text-xs font-medium text-primary-600 bg-primary-50 rounded-lg hover:bg-primary-100 transition-colors">
+                        Seleccionar todo
+                    </button>
+                    <button onclick="deselectAllExport()" class="flex-1 px-3 py-2 text-xs font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors">
+                        Deseleccionar todo
+                    </button>
+                </div>
+                
+                <!-- Download Button -->
+                <button onclick="downloadCustomCSV()" class="w-full py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-600 hover:to-emerald-700 transition-all shadow-lg flex items-center justify-center gap-2">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                    </svg>
+                    Descargar CSV
+                </button>
+                
+                <!-- Info -->
+                <p class="text-xs text-gray-400 text-center mt-4">
+                    Compatible con Mailchimp, HubSpot, ActiveCampaign, Brevo y más
+                </p>
+            </div>
+        </div>
+    </div>
+    
+    <style>
+        @keyframes modalIn {
+            from { opacity: 0; transform: scale(0.95) translateY(10px); }
+            to { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        .animate-modal {
+            animation: modalIn 0.2s ease-out;
+        }
+    </style>
 
     <script>
         let pollingInterval = null;
@@ -621,6 +742,60 @@
         function exportResults(format) {
             window.location.href = `/api/export/${format}`;
         }
+
+        // === Export Modal Functions ===
+        function openExportModal() {
+            document.getElementById('export-modal').classList.remove('hidden');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeExportModal() {
+            document.getElementById('export-modal').classList.add('hidden');
+            document.body.style.overflow = '';
+        }
+
+        function selectAllExport() {
+            document.getElementById('export-dominio').checked = true;
+            document.getElementById('export-url').checked = true;
+            document.getElementById('export-email-csv').checked = true;
+            document.getElementById('export-phone-csv').checked = true;
+            document.getElementById('export-social-csv').checked = true;
+        }
+
+        function deselectAllExport() {
+            document.getElementById('export-dominio').checked = false;
+            document.getElementById('export-url').checked = false;
+            document.getElementById('export-email-csv').checked = false;
+            document.getElementById('export-phone-csv').checked = false;
+            document.getElementById('export-social-csv').checked = false;
+        }
+
+        function downloadCustomCSV() {
+            // Collect selected fields
+            const fields = [];
+            if (document.getElementById('export-dominio').checked) fields.push('domain');
+            if (document.getElementById('export-url').checked) fields.push('url');
+            if (document.getElementById('export-email-csv').checked) fields.push('email');
+            if (document.getElementById('export-phone-csv').checked) fields.push('phone');
+            if (document.getElementById('export-social-csv').checked) fields.push('social');
+
+            // Build URL with query params
+            const params = new URLSearchParams();
+            params.set('fields', fields.join(','));
+            
+            // Download
+            window.location.href = `/api/export/marketing?${params.toString()}`;
+            
+            // Close modal
+            closeExportModal();
+        }
+
+        // Close modal with Escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                closeExportModal();
+            }
+        });
     </script>
 </body>
 </html>
