@@ -292,18 +292,25 @@ def create_app():
                 # === FASE 3: Extraer datos de contacto con Playwright ===
                 if extract_contacts and final_results:
                     search_state["status"] = "Fase 3: Extrayendo datos de contacto..."
-                    extractor = ContactExtractor(timeout=CONTACT_EXTRACTION_TIMEOUT)
+                    print(f"[Fase 3] Iniciando extracción de contactos para {len(final_results)} dominios")
                     
                     total_contacts = len(final_results)
                     for i, domain_info in enumerate(final_results):
+                        domain_url = domain_info["url"]
+                        print(f"[Fase 3] Procesando {i+1}/{total_contacts}: {domain_url}")
+                        search_state["status"] = f"Fase 3: Contactos {i+1}/{total_contacts}..."
+                        
                         try:
-                            search_state["status"] = f"Fase 3: Contactos {i+1}/{total_contacts}..."
+                            # Crear nuevo extractor para cada dominio (evita problemas de estado)
+                            extractor = ContactExtractor(timeout=CONTACT_EXTRACTION_TIMEOUT)
                             
                             # Extracción con Playwright (campos dinámicos)
                             contact_data = extractor.extract(
-                                domain_info["url"],
+                                domain_url,
                                 fields=['email', 'phone', 'social', 'title']
                             )
+                            
+                            print(f"[Fase 3] {domain_url} -> email={contact_data.email}, social={len(contact_data.social_media)}")
                             
                             # Añadir datos de contacto al resultado
                             domain_info["contact"] = {
@@ -327,6 +334,7 @@ def create_app():
                                 domain_info["title"] = contact_data.title
                                 
                         except Exception as e:
+                            print(f"[Fase 3] ERROR en {domain_url}: {str(e)}")
                             # Si falla, dejar el campo de contactos con N/A
                             domain_info["contact"] = {
                                 "email": None,
@@ -346,8 +354,10 @@ def create_app():
                             }
                         
                         # Actualizar progreso
-                        progress = 90 + int((i / total_contacts) * 10)
+                        progress = 90 + int(((i + 1) / total_contacts) * 10)
                         search_state["progress"] = min(progress, 99)
+                    
+                    print(f"[Fase 3] Completada extracción de contactos")
                 else:
                     # Si no se extraen contactos, añadir estructura vacía
                     for domain_info in final_results:

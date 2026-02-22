@@ -355,8 +355,17 @@ class ContactExtractor:
     def extract(self, url: str, fields: List[str] = None) -> ContactData:
         """
         Versión síncrona de extract_async.
+        Crea un nuevo event loop para funcionar en threads (Flask).
         """
-        return asyncio.get_event_loop().run_until_complete(self.extract_async(url, fields))
+        # Crear un nuevo event loop para este thread
+        # Esto es necesario porque Flask ejecuta la búsqueda en un thread separado
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(self.extract_async(url, fields))
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
     
     async def _get_footer_content(self, page: Page) -> Optional[str]:
         """Extrae el contenido del footer."""
