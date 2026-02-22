@@ -68,10 +68,13 @@ def create_app():
         data = request.json
         prompt = data.get('prompt', '').strip()
         max_results = data.get('max_results', 20)
-        extract_contacts = data.get('extract_contacts', True)
+        extract_fields = data.get('extract_fields', ['email'])  # Por defecto solo email
         
         if not prompt:
             return jsonify({"error": "El prompt es requerido"}), 400
+        
+        # Solo extraer contactos si hay campos solicitados
+        extract_contacts = len(extract_fields) > 0
         
         # Iniciar búsqueda en thread separado
         def run_search():
@@ -289,35 +292,39 @@ def create_app():
                 
                 search_state["progress"] = 90
                 
-                # === FASE 3: Extraer datos de contacto con Playwright (Efectividad Extrema) ===
-                if extract_contacts and final_results:
-                    search_state["status"] = "Fase 3: Extrayendo emails y teléfonos..."
-                    print(f"[Fase 3] Iniciando extracción para {len(final_results)} dominios")
+                # === FASE 3: Extraer datos de contacto con Playwright (Selectivo) ===
+                if extract_contacts and final_results and extract_fields:
+                    # Mensaje dinámico según campos solicitados
+                    fields_msg = ", ".join(extract_fields).replace("social", "RRSS")
+                    search_state["status"] = f"Fase 3: Extrayendo {fields_msg}..."
+                    print(f"[Fase 3] Iniciando extracción de [{', '.join(extract_fields)}] para {len(final_results)} dominios")
                     
                     total_contacts = len(final_results)
                     for i, domain_info in enumerate(final_results):
                         domain_url = domain_info["url"]
                         print(f"[Fase 3] {i+1}/{total_contacts}: {domain_url}")
-                        search_state["status"] = f"Fase 3: Extrayendo {i+1}/{total_contacts}..."
+                        search_state["status"] = f"Fase 3: {i+1}/{total_contacts} ({fields_msg})..."
                         
                         try:
                             # Crear nuevo extractor para cada dominio
                             extractor = ContactExtractor(timeout=CONTACT_EXTRACTION_TIMEOUT)
                             
-                            # Extracción con navegación en cascada
-                            contact_data = extractor.extract(domain_url)
+                            # Extracción SELECTIVA - solo campos solicitados
+                            contact_data = extractor.extract(domain_url, fields=extract_fields)
                             
-                            print(f"[Fase 3] {domain_info['domain']} -> email={contact_data.email}, phone={contact_data.phone}, source={contact_data.source}")
+                            print(f"[Fase 3] {domain_info['domain']} -> email={contact_data.email}, phone={contact_data.phone}, social={len(contact_data.social_media)}, source={contact_data.source}")
                             
                             # Añadir datos de contacto al resultado
                             domain_info["contact"] = {
-                                "email": contact_data.email,
-                                "phone": contact_data.phone,
-                                "all_emails": contact_data.all_emails,
-                                "all_phones": contact_data.all_phones,
+                                "email": contact_data.email if 'email' in extract_fields else None,
+                                "phone": contact_data.phone if 'phone' in extract_fields else None,
+                                "all_emails": contact_data.all_emails if 'email' in extract_fields else [],
+                                "all_phones": contact_data.all_phones if 'phone' in extract_fields else [],
+                                "social_media": contact_data.social_media if 'social' in extract_fields else [],
                                 "extraction_success": contact_data.extraction_success,
                                 "source": contact_data.source,
-                                "pages_visited": len(contact_data.pages_visited)
+                                "pages_visited": len(contact_data.pages_visited),
+                                "fields_requested": extract_fields
                             }
                             
                             # Actualizar título si encontramos uno mejor
@@ -331,9 +338,11 @@ def create_app():
                                 "phone": None,
                                 "all_emails": [],
                                 "all_phones": [],
+                                "social_media": [],
                                 "extraction_success": False,
                                 "source": "error",
                                 "pages_visited": 0,
+                                "fields_requested": extract_fields,
                                 "error": str(e)
                             }
                         
@@ -341,8 +350,9 @@ def create_app():
                         progress = 90 + int(((i + 1) / total_contacts) * 10)
                         search_state["progress"] = min(progress, 99)
                     
-                    print(f"[Fase 3] Extracción completada")
+                    print(f"[Fase 3] Extracción completada ({', '.join(extract_fields)})")
                 else:
+                    # Sin extracción de contactos solicitada
                     for domain_info in final_results:
                         domain_info["contact"] = None
                 
@@ -427,36 +437,82 @@ def create_app():
             output = io.StringIO()
             writer = csv.writer(output)
             
-            # Headers simplificados (email + teléfono)
-            headers = [
-                'Dominio', 'URL', 'Confianza', 'Título',
-                'Email', 'Teléfono', 'Emails_Adicionales', 'Teléfonos_Adicionales'
-            ]
+            # Detectar qué campos se extrajeron
+            first_contact = None
+            for r in search_state["results"]:
+                if r.get('contact'):
+                    first_contact = r['contact']
+                    break
+            
+            fields_requested = first_contact.get('fields_requested', []) if first_contact else []
+            
+            # Headers dinámicos basados en campos extraídos
+            headers = ['Dominio', 'URL', 'Confianza', 'Título']
+            
+            if 'email' in fields_requested:
+                headers.extend(['Email', 'Emails_Adicionales'])
+            if 'phone' in fields_requested:
+                headers.extend(['Teléfono', 'Teléfonos_Adicionales'])
+            if 'social' in fields_requested:
+                headers.extend(['LinkedIn', 'Instagram', 'Twitter', 'Facebook', 'YouTube', 'TikTok', 'Otras_RRSS'])
+            
             writer.writerow(headers)
             
             for r in search_state["results"]:
                 contact = r.get('contact', {}) or {}
                 
-                # Emails adicionales (sin el principal)
-                all_emails = contact.get('all_emails', []) or []
-                main_email = contact.get('email', '')
-                extra_emails = [e for e in all_emails if e != main_email]
-                
-                # Teléfonos adicionales (sin el principal)
-                all_phones = contact.get('all_phones', []) or []
-                main_phone = contact.get('phone', '')
-                extra_phones = [p for p in all_phones if p != main_phone]
-                
+                # Base row
                 row = [
                     r['domain'],
                     r['url'],
                     r['confidence'],
-                    r.get('title', ''),
-                    main_email or 'N/A',
-                    main_phone or 'N/A',
-                    '; '.join(extra_emails) if extra_emails else '',
-                    '; '.join(extra_phones) if extra_phones else ''
+                    r.get('title', '')
                 ]
+                
+                # Email columns
+                if 'email' in fields_requested:
+                    all_emails = contact.get('all_emails', []) or []
+                    main_email = contact.get('email', '')
+                    extra_emails = [e for e in all_emails if e != main_email]
+                    row.extend([
+                        main_email or 'N/A',
+                        '; '.join(extra_emails) if extra_emails else ''
+                    ])
+                
+                # Phone columns
+                if 'phone' in fields_requested:
+                    all_phones = contact.get('all_phones', []) or []
+                    main_phone = contact.get('phone', '')
+                    extra_phones = [p for p in all_phones if p != main_phone]
+                    row.extend([
+                        main_phone or 'N/A',
+                        '; '.join(extra_phones) if extra_phones else ''
+                    ])
+                
+                # Social media columns
+                if 'social' in fields_requested:
+                    social_media = contact.get('social_media', []) or []
+                    social_by_platform = {}
+                    other_social = []
+                    
+                    for sm in social_media:
+                        platform = sm.get('platform', 'other')
+                        url = sm.get('url', '')
+                        if platform in ['linkedin', 'instagram', 'twitter', 'facebook', 'youtube', 'tiktok']:
+                            social_by_platform[platform] = url
+                        else:
+                            other_social.append(url)
+                    
+                    row.extend([
+                        social_by_platform.get('linkedin', ''),
+                        social_by_platform.get('instagram', ''),
+                        social_by_platform.get('twitter', ''),
+                        social_by_platform.get('facebook', ''),
+                        social_by_platform.get('youtube', ''),
+                        social_by_platform.get('tiktok', ''),
+                        '; '.join(other_social) if other_social else ''
+                    ])
+                
                 writer.writerow(row)
             
             return Response(

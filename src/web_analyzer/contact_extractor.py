@@ -1,19 +1,19 @@
 """
-ContactExtractor - Extracción de Efectividad Extrema
-Motor de extracción con Playwright optimizado para capturar 100% de emails y teléfonos.
+ContactExtractor - Extracción Selectiva de Alta Efectividad
+Motor de extracción con Playwright optimizado para capturar solo los datos solicitados.
 
 Características:
+- Extracción selectiva (solo email, teléfono o RRSS según se solicite)
 - Navegación en cascada (Triple Salto)
 - Extracción de atributos ocultos (mailto:, tel:)
 - Regex de alta sensibilidad
 - Técnicas anti-bloqueo (humano real)
-- Persistencia inmediata de datos
 """
 import asyncio
 import re
 import random
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 from urllib.parse import urlparse, urljoin
 
 try:
@@ -23,16 +23,14 @@ except ImportError:
     PLAYWRIGHT_AVAILABLE = False
 
 
-# User-Agent moderno de Chrome (actualizado)
 CHROME_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 
-# Args para Codespaces + Anti-detección
 BROWSER_ARGS = [
     '--no-sandbox',
     '--disable-setuid-sandbox',
     '--disable-dev-shm-usage',
     '--disable-gpu',
-    '--disable-blink-features=AutomationControlled',  # Anti-bot detection
+    '--disable-blink-features=AutomationControlled',
     '--disable-infobars',
     '--window-size=1920,1080'
 ]
@@ -44,19 +42,18 @@ class ContactData:
     domain: str
     url: str
     
-    # Datos principales
     title: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
     
-    # Todos los emails/teléfonos encontrados
     all_emails: List[str] = field(default_factory=list)
     all_phones: List[str] = field(default_factory=list)
+    social_media: List[Dict[str, str]] = field(default_factory=list)
     
-    # Estado
     extraction_success: bool = False
     source: str = ""
     pages_visited: List[str] = field(default_factory=list)
+    fields_requested: List[str] = field(default_factory=list)
     error_message: Optional[str] = None
     
     def to_dict(self) -> Dict[str, Any]:
@@ -68,63 +65,78 @@ class ContactData:
             "phone": self.phone,
             "all_emails": self.all_emails,
             "all_phones": self.all_phones,
+            "social_media": self.social_media,
             "extraction_success": self.extraction_success,
             "source": self.source,
             "pages_visited": self.pages_visited,
+            "fields_requested": self.fields_requested,
             "error_message": self.error_message
         }
     
-    def has_complete_data(self) -> bool:
-        """Tiene email Y teléfono."""
-        return bool(self.email and self.phone)
+    def has_all_requested(self, fields: List[str]) -> bool:
+        """Comprueba si tenemos todos los datos solicitados."""
+        for f in fields:
+            if f == 'email' and not self.email:
+                return False
+            if f == 'phone' and not self.phone:
+                return False
+            if f == 'social' and not self.social_media:
+                return False
+        return True
     
     def has_any_data(self) -> bool:
-        return bool(self.email or self.phone)
+        return bool(self.email or self.phone or self.social_media)
     
     def to_csv_row(self) -> Dict[str, str]:
+        social_str = "; ".join([s.get('url', '') for s in self.social_media]) if self.social_media else ""
         return {
             "domain": self.domain,
             "url": self.url,
             "title": self.title or "N/A",
             "email": self.email or "N/A",
-            "phone": self.phone or "N/A"
+            "phone": self.phone or "N/A",
+            "social_media": social_str or "N/A"
         }
 
 
 class ContactExtractor:
     """
-    Extractor de contactos de efectividad extrema.
-    Captura 100% de emails y teléfonos disponibles.
+    Extractor selectivo de contactos.
+    Solo busca los datos que el usuario solicita para máxima eficiencia.
     """
     
-    # === REGEX DE ALTA SENSIBILIDAD ===
-    
-    # Email: Captura todo excepto dominios técnicos
+    # === REGEX ===
     EMAIL_REGEX = re.compile(
         r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',
         re.IGNORECASE
     )
     
-    # mailto: extractor
     MAILTO_REGEX = re.compile(
         r'href=["\']mailto:([^"\'?]+)',
         re.IGNORECASE
     )
     
-    # tel: extractor  
     TEL_REGEX = re.compile(
         r'href=["\']tel:([^"\']+)["\']',
         re.IGNORECASE
     )
     
-    # Teléfono robusto: españoles (6,7,8,9) e internacionales
     PHONE_REGEX = re.compile(
-        r'(?:\+34\s?)?[6789]\d{2}[\s.-]?\d{3}[\s.-]?\d{3}|'  # Españoles
-        r'(?:\+\d{1,3}[\s.-]?)?\(?\d{2,4}\)?[\s.-]?\d{3,4}[\s.-]?\d{3,4}',  # Internacionales
+        r'(?:\+34\s?)?[6789]\d{2}[\s.-]?\d{3}[\s.-]?\d{3}|'
+        r'(?:\+\d{1,3}[\s.-]?)?\(?\d{2,4}\)?[\s.-]?\d{3,4}[\s.-]?\d{3,4}',
         re.IGNORECASE
     )
     
-    # Dominios técnicos a excluir (emails inválidos)
+    # Social media patterns
+    SOCIAL_PATTERNS = {
+        'linkedin': re.compile(r'https?://(?:www\.)?linkedin\.com/(?:company|in)/[a-zA-Z0-9_-]+/?', re.IGNORECASE),
+        'instagram': re.compile(r'https?://(?:www\.)?instagram\.com/[a-zA-Z0-9_.]+/?', re.IGNORECASE),
+        'twitter': re.compile(r'https?://(?:www\.)?(?:twitter\.com|x\.com)/[a-zA-Z0-9_]+/?', re.IGNORECASE),
+        'facebook': re.compile(r'https?://(?:www\.)?facebook\.com/[a-zA-Z0-9.]+/?', re.IGNORECASE),
+        'youtube': re.compile(r'https?://(?:www\.)?youtube\.com/(?:c/|channel/|user/|@)?[a-zA-Z0-9_-]+/?', re.IGNORECASE),
+        'tiktok': re.compile(r'https?://(?:www\.)?tiktok\.com/@[a-zA-Z0-9_.]+/?', re.IGNORECASE),
+    }
+    
     EXCLUDED_DOMAINS = {
         'sentry.io', 'wixpress.com', 'w3.org', 'schema.org',
         'googleusercontent.com', 'gstatic.com', 'googleapis.com',
@@ -133,26 +145,15 @@ class ContactExtractor:
         'example.com', 'example.org', 'test.com', 'localhost'
     }
     
-    # Extensiones de archivo a excluir
     EXCLUDED_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico', '.pdf'}
-    
-    # Prefijos de email a excluir
     EXCLUDED_PREFIXES = {'noreply', 'no-reply', 'donotreply', 'mailer-daemon', 'postmaster'}
     
-    # === RUTAS DE NAVEGACIÓN EN CASCADA ===
     CONTACT_PATHS = [
-        '/contacto',
-        '/contact', 
-        '/contactenos',
-        '/aviso-legal',
-        '/legal',
-        '/quienes-somos',
-        '/about',
-        '/sobre-nosotros',
-        '/impressum',
-        '/kontakt',
-        '/contacto.html',
-        '/contact.html'
+        '/contacto', '/contact', '/contactenos',
+        '/aviso-legal', '/legal',
+        '/quienes-somos', '/about', '/sobre-nosotros',
+        '/impressum', '/kontakt',
+        '/contacto.html', '/contact.html'
     ]
     
     def __init__(self, timeout: int = 45, headless: bool = True):
@@ -163,7 +164,6 @@ class ContactExtractor:
         self._playwright = None
     
     async def _init_browser(self):
-        """Inicializa navegador con anti-detección."""
         if not PLAYWRIGHT_AVAILABLE:
             raise ImportError("Playwright no instalado. Ejecuta: pip install playwright && playwright install chromium")
         
@@ -174,7 +174,6 @@ class ContactExtractor:
         )
     
     async def _close_browser(self):
-        """Cierra navegador y libera memoria."""
         try:
             if self._context:
                 await self._context.close()
@@ -195,7 +194,6 @@ class ContactExtractor:
             pass
     
     async def _create_stealth_page(self) -> Page:
-        """Crea página con técnicas anti-detección."""
         self._context = await self._browser.new_context(
             viewport={'width': 1920, 'height': 1080},
             user_agent=CHROME_USER_AGENT,
@@ -206,13 +204,11 @@ class ContactExtractor:
         
         page = await self._context.new_page()
         
-        # Bloquear solo recursos pesados (mantener JS para scripts de contacto)
         await page.route("**/*", lambda route: (
             route.abort() if route.request.resource_type in ["image", "font", "media"]
             else route.continue_()
         ))
         
-        # Inyectar script anti-detección
         await page.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
             window.chrome = {runtime: {}};
@@ -221,85 +217,90 @@ class ContactExtractor:
         return page
     
     async def _simulate_human(self, page: Page):
-        """Simula comportamiento humano para activar scripts ocultos."""
         try:
-            # Movimiento de ratón aleatorio
             await page.mouse.move(
                 random.randint(100, 500),
                 random.randint(100, 300)
             )
             await asyncio.sleep(0.3)
             
-            # Scroll aleatorio
             scroll_amount = random.randint(300, 800)
             await page.evaluate(f"window.scrollBy(0, {scroll_amount})")
             await asyncio.sleep(0.5)
             
-            # Scroll hasta el footer
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             await asyncio.sleep(0.5)
             
-            # Volver arriba
             await page.evaluate("window.scrollTo(0, 0)")
             await asyncio.sleep(0.3)
         except:
             pass
     
-    async def extract_async(self, url: str) -> ContactData:
+    async def extract_async(self, url: str, fields: List[str] = None) -> ContactData:
         """
-        Extracción de efectividad extrema.
-        Navegación en cascada hasta encontrar email Y teléfono.
+        Extracción selectiva - solo busca los campos solicitados.
+        
+        Args:
+            url: URL a analizar
+            fields: Lista de campos a extraer ['email', 'phone', 'social']
+                   Si es None o vacío, no extrae nada (solo título)
         """
         if not url.startswith(("http://", "https://")):
             url = f"https://{url}"
         
         domain = self._extract_domain(url)
         contact = ContactData(domain=domain, url=url)
+        
+        # Si no hay campos solicitados, solo devolver estructura básica
+        if not fields:
+            contact.fields_requested = []
+            return contact
+        
+        contact.fields_requested = fields
         sources = []
+        
+        # Determinar qué buscar
+        search_email = 'email' in fields
+        search_phone = 'phone' in fields
+        search_social = 'social' in fields
         
         try:
             await self._init_browser()
             page = await self._create_stealth_page()
             page.set_default_timeout(self.timeout * 1000)
             
-            # === PASO 1: Extraer de la HOME ===
+            # === PASO 1: HOME ===
             try:
                 await page.goto(url, wait_until='domcontentloaded', timeout=15000)
                 contact.pages_visited.append(url)
                 
-                # Extraer título
                 try:
                     contact.title = await page.title()
                 except:
                     pass
                 
-                # Simular humano
                 await self._simulate_human(page)
-                
-                # Esperar carga dinámica
                 await asyncio.sleep(2)
                 
-                # Extraer datos
                 html = await page.content()
-                self._extract_all_data(html, contact)
+                self._extract_data(html, contact, search_email, search_phone, search_social)
                 
-                if contact.email or contact.phone:
+                if contact.has_any_data():
                     sources.append("home")
                 
             except Exception as e:
                 contact.error_message = f"Error en home: {str(e)[:50]}"
             
             # === PASO 2: NAVEGACIÓN EN CASCADA ===
-            # Continuar hasta tener email Y teléfono, o agotar rutas
-            if not contact.has_complete_data():
+            # Solo continuar si no tenemos todos los datos solicitados
+            if not contact.has_all_requested(fields):
                 for path in self.CONTACT_PATHS:
-                    if contact.has_complete_data():
-                        break  # Ya tenemos todo
+                    if contact.has_all_requested(fields):
+                        break
                     
                     try:
                         contact_url = urljoin(url, path)
                         
-                        # Evitar visitar la misma página
                         if contact_url in contact.pages_visited:
                             continue
                         
@@ -312,13 +313,11 @@ class ContactExtractor:
                         if response and response.ok:
                             contact.pages_visited.append(contact_url)
                             
-                            # Simular humano
                             await self._simulate_human(page)
                             await asyncio.sleep(1)
                             
-                            # Extraer datos
                             html = await page.content()
-                            found_new = self._extract_all_data(html, contact)
+                            found_new = self._extract_data(html, contact, search_email, search_phone, search_social)
                             
                             if found_new:
                                 sources.append(path.strip('/'))
@@ -326,7 +325,6 @@ class ContactExtractor:
                     except:
                         continue
             
-            # Cerrar página
             try:
                 await page.close()
             except:
@@ -337,84 +335,89 @@ class ContactExtractor:
         except Exception as e:
             contact.error_message = f"Error: {str(e)[:100]}"
         finally:
-            # Cerrar browser al final
             await self._close_browser()
         
-        # Establecer fuente y estado
         contact.source = " + ".join(sources) if sources else "none"
         contact.extraction_success = contact.has_any_data()
         
         return contact
     
-    def _extract_all_data(self, html: str, contact: ContactData) -> bool:
-        """
-        Extrae emails y teléfonos de HTML.
-        Retorna True si encontró datos nuevos.
-        """
+    def _extract_data(self, html: str, contact: ContactData, 
+                      search_email: bool, search_phone: bool, search_social: bool) -> bool:
+        """Extrae solo los datos solicitados."""
         found_new = False
         
-        # === EXTRAER EMAILS ===
-        
-        # 1. De mailto: (más confiable)
-        for match in self.MAILTO_REGEX.finditer(html):
-            email = match.group(1).strip().lower()
-            email = email.split('?')[0]  # Quitar parámetros
+        # === EMAIL ===
+        if search_email and not contact.email:
+            for match in self.MAILTO_REGEX.finditer(html):
+                email = match.group(1).strip().lower()
+                email = email.split('?')[0]
+                
+                if self._is_valid_email(email) and email not in contact.all_emails:
+                    contact.all_emails.append(email)
+                    if not contact.email:
+                        contact.email = email
+                        found_new = True
             
-            if self._is_valid_email(email) and email not in contact.all_emails:
-                contact.all_emails.append(email)
-                if not contact.email:
-                    contact.email = email
-                    found_new = True
+            for match in self.EMAIL_REGEX.finditer(html):
+                email = match.group().lower()
+                
+                if self._is_valid_email(email) and email not in contact.all_emails:
+                    contact.all_emails.append(email)
+                    if not contact.email:
+                        contact.email = email
+                        found_new = True
         
-        # 2. De texto plano
-        for match in self.EMAIL_REGEX.finditer(html):
-            email = match.group().lower()
+        # === TELÉFONO ===
+        if search_phone and not contact.phone:
+            for match in self.TEL_REGEX.finditer(html):
+                phone = match.group(1).strip()
+                phone = self._normalize_phone(phone)
+                
+                if self._is_valid_phone(phone) and phone not in contact.all_phones:
+                    contact.all_phones.append(phone)
+                    if not contact.phone:
+                        contact.phone = phone
+                        found_new = True
             
-            if self._is_valid_email(email) and email not in contact.all_emails:
-                contact.all_emails.append(email)
-                if not contact.email:
-                    contact.email = email
-                    found_new = True
+            for match in self.PHONE_REGEX.finditer(html):
+                phone = match.group()
+                phone = self._normalize_phone(phone)
+                
+                if self._is_valid_phone(phone) and phone not in contact.all_phones:
+                    contact.all_phones.append(phone)
+                    if not contact.phone:
+                        contact.phone = phone
+                        found_new = True
         
-        # === EXTRAER TELÉFONOS ===
-        
-        # 1. De tel: (más confiable)
-        for match in self.TEL_REGEX.finditer(html):
-            phone = match.group(1).strip()
-            phone = self._normalize_phone(phone)
+        # === REDES SOCIALES ===
+        if search_social:
+            found_urls: Set[str] = {s['url'] for s in contact.social_media}
             
-            if self._is_valid_phone(phone) and phone not in contact.all_phones:
-                contact.all_phones.append(phone)
-                if not contact.phone:
-                    contact.phone = phone
-                    found_new = True
-        
-        # 2. De texto plano
-        for match in self.PHONE_REGEX.finditer(html):
-            phone = match.group()
-            phone = self._normalize_phone(phone)
-            
-            if self._is_valid_phone(phone) and phone not in contact.all_phones:
-                contact.all_phones.append(phone)
-                if not contact.phone:
-                    contact.phone = phone
-                    found_new = True
+            for platform, pattern in self.SOCIAL_PATTERNS.items():
+                for match in pattern.finditer(html):
+                    social_url = match.group()
+                    
+                    if social_url not in found_urls and self._is_valid_social(social_url, platform):
+                        contact.social_media.append({
+                            'platform': platform,
+                            'url': social_url
+                        })
+                        found_urls.add(social_url)
+                        found_new = True
         
         return found_new
     
     def _is_valid_email(self, email: str) -> bool:
-        """Valida email con alta sensibilidad."""
         if not email or '@' not in email:
             return False
         
         email = email.lower().strip()
         
-        # Verificar extensiones de archivo
         for ext in self.EXCLUDED_EXTENSIONS:
             if email.endswith(ext):
                 return False
         
-        # Verificar dominio
         try:
             domain = email.split('@')[1]
             if domain in self.EXCLUDED_DOMAINS:
@@ -424,7 +427,6 @@ class ContactExtractor:
         except:
             return False
         
-        # Verificar prefijo
         prefix = email.split('@')[0]
         if any(prefix.startswith(excl) for excl in self.EXCLUDED_PREFIXES):
             return False
@@ -432,32 +434,40 @@ class ContactExtractor:
         return True
     
     def _is_valid_phone(self, phone: str) -> bool:
-        """Valida teléfono."""
         if not phone:
             return False
         
-        # Contar dígitos
         digits = re.sub(r'\D', '', phone)
         
-        # Teléfono válido: 9-15 dígitos
         if not (9 <= len(digits) <= 15):
             return False
         
-        # Evitar números obvios falsos
         if digits in ['123456789', '000000000', '111111111', '999999999']:
             return False
         
         return True
     
+    def _is_valid_social(self, url: str, platform: str) -> bool:
+        """Valida URLs de redes sociales."""
+        url_lower = url.lower()
+        
+        # Excluir URLs de recursos estáticos
+        if any(ext in url_lower for ext in ['.png', '.jpg', '.css', '.js']):
+            return False
+        
+        # Excluir páginas genéricas
+        generic_paths = ['share', 'sharer', 'intent', 'dialog', 'login', 'signup']
+        if any(gp in url_lower for gp in generic_paths):
+            return False
+        
+        return True
+    
     def _normalize_phone(self, phone: str) -> str:
-        """Normaliza teléfono: quita espacios y guiones extra."""
-        # Limpiar
         phone = re.sub(r'[\s.-]+', ' ', phone.strip())
         phone = re.sub(r'\s+', ' ', phone)
         return phone
     
     def _extract_domain(self, url: str) -> str:
-        """Extrae dominio de URL."""
         try:
             parsed = urlparse(url)
             domain = parsed.netloc
@@ -467,7 +477,7 @@ class ContactExtractor:
         except:
             return url
     
-    def extract(self, url: str) -> ContactData:
+    def extract(self, url: str, fields: List[str] = None) -> ContactData:
         """
         Versión síncrona para Flask.
         Crea nuevo event loop para funcionar en threads.
@@ -475,14 +485,13 @@ class ContactExtractor:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            return loop.run_until_complete(self.extract_async(url))
+            return loop.run_until_complete(self.extract_async(url, fields))
         finally:
             loop.close()
             asyncio.set_event_loop(None)
 
 
-# Función de conveniencia
-def extract_contacts(url: str, timeout: int = 45) -> ContactData:
+def extract_contacts(url: str, fields: List[str] = None, timeout: int = 45) -> ContactData:
     """Extrae contactos de una URL."""
     extractor = ContactExtractor(timeout=timeout)
-    return extractor.extract(url)
+    return extractor.extract(url, fields)
