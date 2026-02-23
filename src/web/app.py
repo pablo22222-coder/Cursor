@@ -34,6 +34,7 @@ from src.web_analyzer.domain_analyzer import DomainAnalyzer
 from src.web_analyzer.parallel_analyzer import analyze_domains_parallel, MAX_DOMAINS as PARALLEL_MAX_DOMAINS
 from src.web_analyzer.parallel_extractor import extract_contacts_parallel
 from src.web_analyzer.parallel_wappalyzer import analyze_technologies_parallel, ParallelWappalyzerAnalyzer
+from src.web_analyzer.hybrid_extractor import extract_contacts_hybrid
 from src.utils.helpers import export_to_json, export_to_csv
 
 # Timeout para fallback sin filtro de tecnología (segundos)
@@ -388,43 +389,50 @@ def create_app():
                 
                 search_state["progress"] = 90
                 
-                # === FASE 3: Extraer datos de contacto con 3 WORKERS PARALELOS ===
+                # === FASE 3: EXTRACCIÓN HÍBRIDA (Katana + Playwright) - 3 WORKERS ===
                 if extract_contacts and final_results and extract_fields:
                     fields_msg = ", ".join(extract_fields).replace("social", "RRSS")
-                    search_state["status"] = f"Fase 3: Extrayendo {fields_msg} (3 workers)..."
-                    print(f"[Fase 3] Iniciando extracción PARALELA de [{', '.join(extract_fields)}] para {len(final_results)} dominios")
+                    search_state["status"] = f"Fase 3: ⚡ Katana + 🔍 Playwright ({fields_msg})..."
+                    print(f"[Fase 3] Iniciando extracción HÍBRIDA para {len(final_results)} dominios")
+                    print(f"[Fase 3] Estrategia: Katana primero (7s) → Playwright si falla")
                     
-                    def on_contact_progress(progress, status, completed, total):
-                        """Callback para actualizar progreso de extracción."""
+                    def on_hybrid_progress(progress, status, completed, total):
+                        """Callback para progreso híbrido."""
                         phase3_progress = 90 + int((progress / 100) * 10)
                         search_state["progress"] = min(phase3_progress, 99)
-                        search_state["status"] = f"Fase 3: {completed}/{total} ({fields_msg}) - 3 workers"
+                        search_state["status"] = f"Fase 3: {status} ({completed}/{total})"
                     
                     try:
-                        # Extracción PARALELA con 3 workers
-                        final_results = extract_contacts_parallel(
+                        # Extracción HÍBRIDA: Katana (rápido) + Playwright (fallback)
+                        final_results = extract_contacts_hybrid(
                             final_results,
                             fields=extract_fields,
-                            on_progress=on_contact_progress
+                            on_progress=on_hybrid_progress
                         )
                         
-                        # Añadir fields_requested a cada resultado
+                        # Añadir fields_requested y contar estadísticas
+                        katana_count = 0
+                        playwright_count = 0
                         for domain_info in final_results:
                             if domain_info.get("contact"):
                                 domain_info["contact"]["fields_requested"] = extract_fields
+                                method = domain_info["contact"].get("extraction_method", "")
+                                if method == "katana":
+                                    katana_count += 1
+                                elif method in ["playwright", "both"]:
+                                    playwright_count += 1
                         
-                        print(f"[Fase 3] Extracción PARALELA completada ({', '.join(extract_fields)})")
+                        print(f"[Fase 3] ✓ Completado: {katana_count} Katana (⚡), {playwright_count} Playwright (🔍)")
                         
                     except Exception as e:
-                        print(f"[Fase 3] ERROR en extracción paralela: {str(e)}")
-                        # Fallback: añadir contact vacío a cada resultado
+                        print(f"[Fase 3] ERROR en extracción híbrida: {str(e)}")
                         for domain_info in final_results:
                             if not domain_info.get("contact"):
                                 domain_info["contact"] = {
                                     "email": None, "phone": None,
                                     "all_emails": [], "all_phones": [],
                                     "social_media": [], "extraction_success": False,
-                                    "source": "error", "pages_visited": 0,
+                                    "extraction_method": "error", "source": str(e)[:50],
                                     "fields_requested": extract_fields
                                 }
                 else:
