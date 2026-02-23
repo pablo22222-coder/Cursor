@@ -32,6 +32,8 @@ from src.web_analyzer.wappalyzer_analyzer import WappalyzerAnalyzer
 from src.web_analyzer.contact_extractor import ContactExtractor
 from src.web_analyzer.domain_analyzer import DomainAnalyzer
 from src.web_analyzer.parallel_analyzer import analyze_domains_parallel, MAX_DOMAINS as PARALLEL_MAX_DOMAINS
+from src.web_analyzer.parallel_extractor import extract_contacts_parallel
+from src.web_analyzer.parallel_wappalyzer import analyze_technologies_parallel, ParallelWappalyzerAnalyzer
 from src.utils.helpers import export_to_json, export_to_csv
 
 # Timeout para fallback sin filtro de tecnología (segundos)
@@ -40,6 +42,8 @@ TECHNOLOGY_FILTER_TIMEOUT = 180
 CONTACT_EXTRACTION_TIMEOUT = 45
 # Máximo de dominios para análisis masivo
 MAX_ANALYZER_DOMAINS = 30
+# Workers paralelos
+PARALLEL_WORKERS = 3
 
 
 def create_app():
@@ -290,23 +294,17 @@ def create_app():
                 # Ordenar por confianza
                 phase1_passed.sort(key=lambda x: x["confidence"], reverse=True)
                 
-                # === FASE 2: Verificar tecnologías con Wappalyzer ===
+                # === FASE 2: Verificar tecnologías con 3 WORKERS PARALELOS ===
                 validated_with_tech = []
                 validated_without_tech = []
                 
-                start_time = time.time()
-                wappalyzer = WappalyzerAnalyzer() if has_tech_filters else None
+                search_state["status"] = "Fase 2: Preparando análisis de tecnologías..."
                 
-                search_state["status"] = "Fase 2: Analizando tecnologías..."
-                total_phase2 = len(phase1_passed)
-                
-                for i, item in enumerate(phase1_passed):
-                    elapsed = time.time() - start_time
-                    
+                # Preparar lista de dominios para análisis
+                domains_to_analyze = []
+                for item in phase1_passed:
                     result = item["validation_result"]
-                    sr = item["search_result"]
                     
-                    # Extraer info de schema si existe
                     schema_info = {}
                     if result.schema_data:
                         schema_info = {
@@ -331,57 +329,46 @@ def create_app():
                         "schema": schema_info,
                         "tech_match": False
                     }
+                    domains_to_analyze.append(domain_info)
+                
+                # Si hay filtros de tecnología, analizar con Wappalyzer en PARALELO
+                if has_tech_filters and domains_to_analyze:
+                    search_state["status"] = "Fase 2: Wappalyzer (3 workers paralelos)..."
+                    print(f"[Fase 2] Iniciando análisis PARALELO de {len(domains_to_analyze)} dominios")
                     
-                    # Siempre guardar en la lista sin filtro de tech
-                    validated_without_tech.append(domain_info.copy())
+                    def on_wappalyzer_progress(progress, status, completed, total):
+                        phase2_progress = 65 + int((progress / 100) * 25)
+                        search_state["progress"] = min(phase2_progress, 90)
+                        search_state["status"] = f"Fase 2: {completed}/{total} - 3 workers"
                     
-                    # Si hay filtros de tecnología, verificar con Wappalyzer
-                    if has_tech_filters and wappalyzer:
-                        try:
-                            wap_profile = wappalyzer.analyze(sr.url)
+                    try:
+                        # Análisis PARALELO con 3 workers
+                        analyzed_domains = analyze_technologies_parallel(
+                            domains_to_analyze,
+                            on_progress=on_wappalyzer_progress
+                        )
+                        
+                        # Clasificar resultados
+                        parallel_wappalyzer = ParallelWappalyzerAnalyzer()
+                        must_have = analysis.required_tools if hasattr(analysis, 'required_tools') else []
+                        must_not = analysis.excluded_tools if hasattr(analysis, 'excluded_tools') else []
+                        
+                        for domain_info in analyzed_domains:
+                            validated_without_tech.append(domain_info.copy())
                             
-                            if wap_profile.analysis_success:
-                                domain_info["tech_profile"] = {
-                                    "all_techs": wap_profile.all_technologies_names[:10],
-                                    "crm": wap_profile.crm,
-                                    "email": wap_profile.email_marketing,
-                                    "chat": wap_profile.live_chat,
-                                    "analytics": wap_profile.analytics,
-                                    "ecommerce": wap_profile.ecommerce,
-                                    "cms": wap_profile.cms
-                                }
-                                domain_info["tech"] = wap_profile.ecommerce[:3]
-                                domain_info["is_ecommerce"] = wap_profile.has_ecommerce
-                                
-                                # Verificar requisitos de tecnología
-                                meets_tech, tech_reason = wappalyzer.check_technology_requirements(
-                                    wap_profile,
-                                    must_have=analysis.required_tools if hasattr(analysis, 'required_tools') else [],
-                                    must_not=analysis.excluded_tools if hasattr(analysis, 'excluded_tools') else []
-                                )
-                                
-                                if meets_tech:
-                                    domain_info["tech_match"] = True
-                                    if tech_reason:
-                                        domain_info["reasons"].append(f"Tech: {tech_reason}")
-                                    validated_with_tech.append(domain_info)
-                        except Exception as e:
-                            pass
-                    
-                    # Actualizar progreso
-                    progress = 65 + int((i / total_phase2) * 30)
-                    search_state["progress"] = min(progress, 95)
-                    
-                    # Mostrar estado actual
-                    if has_tech_filters:
-                        search_state["status"] = f"Fase 2: {i+1}/{total_phase2} | Con tech: {len(validated_with_tech)}"
-                    else:
-                        search_state["status"] = f"Fase 2: {i+1}/{total_phase2}"
-                    
-                    # Verificar timeout
-                    if has_tech_filters and elapsed >= TECHNOLOGY_FILTER_TIMEOUT and len(validated_with_tech) == 0:
-                        search_state["status"] = f"⚠️ Timeout ({TECHNOLOGY_FILTER_TIMEOUT}s): usando resultados sin filtro de tecnología"
-                        break
+                            if parallel_wappalyzer.check_tech_requirements(domain_info, must_have, must_not):
+                                domain_info["tech_match"] = True
+                                validated_with_tech.append(domain_info)
+                        
+                        print(f"[Fase 2] Análisis PARALELO completado: {len(validated_with_tech)} cumplen requisitos")
+                        
+                    except Exception as e:
+                        print(f"[Fase 2] ERROR en análisis paralelo: {str(e)}")
+                        validated_without_tech = domains_to_analyze
+                else:
+                    # Sin filtros de tecnología, usar lista directamente
+                    validated_without_tech = domains_to_analyze
+                    search_state["progress"] = 90
                 
                 # === Determinar resultados finales ===
                 final_results = []
@@ -401,67 +388,46 @@ def create_app():
                 
                 search_state["progress"] = 90
                 
-                # === FASE 3: Extraer datos de contacto con Playwright (Selectivo) ===
+                # === FASE 3: Extraer datos de contacto con 3 WORKERS PARALELOS ===
                 if extract_contacts and final_results and extract_fields:
-                    # Mensaje dinámico según campos solicitados
                     fields_msg = ", ".join(extract_fields).replace("social", "RRSS")
-                    search_state["status"] = f"Fase 3: Extrayendo {fields_msg}..."
-                    print(f"[Fase 3] Iniciando extracción de [{', '.join(extract_fields)}] para {len(final_results)} dominios")
+                    search_state["status"] = f"Fase 3: Extrayendo {fields_msg} (3 workers)..."
+                    print(f"[Fase 3] Iniciando extracción PARALELA de [{', '.join(extract_fields)}] para {len(final_results)} dominios")
                     
-                    total_contacts = len(final_results)
-                    for i, domain_info in enumerate(final_results):
-                        domain_url = domain_info["url"]
-                        print(f"[Fase 3] {i+1}/{total_contacts}: {domain_url}")
-                        search_state["status"] = f"Fase 3: {i+1}/{total_contacts} ({fields_msg})..."
-                        
-                        try:
-                            # Crear nuevo extractor para cada dominio
-                            extractor = ContactExtractor(timeout=CONTACT_EXTRACTION_TIMEOUT)
-                            
-                            # Extracción SELECTIVA - solo campos solicitados
-                            contact_data = extractor.extract(domain_url, fields=extract_fields)
-                            
-                            print(f"[Fase 3] {domain_info['domain']} -> email={contact_data.email}, phone={contact_data.phone}, social={len(contact_data.social_media)}, source={contact_data.source}")
-                            
-                            # Añadir datos de contacto al resultado
-                            domain_info["contact"] = {
-                                "email": contact_data.email if 'email' in extract_fields else None,
-                                "phone": contact_data.phone if 'phone' in extract_fields else None,
-                                "all_emails": contact_data.all_emails if 'email' in extract_fields else [],
-                                "all_phones": contact_data.all_phones if 'phone' in extract_fields else [],
-                                "social_media": contact_data.social_media if 'social' in extract_fields else [],
-                                "extraction_success": contact_data.extraction_success,
-                                "source": contact_data.source,
-                                "pages_visited": len(contact_data.pages_visited),
-                                "fields_requested": extract_fields
-                            }
-                            
-                            # Actualizar título si encontramos uno mejor
-                            if contact_data.title and (not domain_info.get("title") or len(contact_data.title) > len(domain_info.get("title", ""))):
-                                domain_info["title"] = contact_data.title
-                                
-                        except Exception as e:
-                            print(f"[Fase 3] ERROR en {domain_url}: {str(e)}")
-                            domain_info["contact"] = {
-                                "email": None,
-                                "phone": None,
-                                "all_emails": [],
-                                "all_phones": [],
-                                "social_media": [],
-                                "extraction_success": False,
-                                "source": "error",
-                                "pages_visited": 0,
-                                "fields_requested": extract_fields,
-                                "error": str(e)
-                            }
-                        
-                        # Actualizar progreso
-                        progress = 90 + int(((i + 1) / total_contacts) * 10)
-                        search_state["progress"] = min(progress, 99)
+                    def on_contact_progress(progress, status, completed, total):
+                        """Callback para actualizar progreso de extracción."""
+                        phase3_progress = 90 + int((progress / 100) * 10)
+                        search_state["progress"] = min(phase3_progress, 99)
+                        search_state["status"] = f"Fase 3: {completed}/{total} ({fields_msg}) - 3 workers"
                     
-                    print(f"[Fase 3] Extracción completada ({', '.join(extract_fields)})")
+                    try:
+                        # Extracción PARALELA con 3 workers
+                        final_results = extract_contacts_parallel(
+                            final_results,
+                            fields=extract_fields,
+                            on_progress=on_contact_progress
+                        )
+                        
+                        # Añadir fields_requested a cada resultado
+                        for domain_info in final_results:
+                            if domain_info.get("contact"):
+                                domain_info["contact"]["fields_requested"] = extract_fields
+                        
+                        print(f"[Fase 3] Extracción PARALELA completada ({', '.join(extract_fields)})")
+                        
+                    except Exception as e:
+                        print(f"[Fase 3] ERROR en extracción paralela: {str(e)}")
+                        # Fallback: añadir contact vacío a cada resultado
+                        for domain_info in final_results:
+                            if not domain_info.get("contact"):
+                                domain_info["contact"] = {
+                                    "email": None, "phone": None,
+                                    "all_emails": [], "all_phones": [],
+                                    "social_media": [], "extraction_success": False,
+                                    "source": "error", "pages_visited": 0,
+                                    "fields_requested": extract_fields
+                                }
                 else:
-                    # Sin extracción de contactos solicitada
                     for domain_info in final_results:
                         domain_info["contact"] = None
                 
