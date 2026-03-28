@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Domain Finder</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Inter', 'sans-serif'] },
+                    colors: {
+                        primary: {
+                            50: '#f0f9ff', 100: '#e0f2fe', 200: '#bae6fd', 300: '#7dd3fc',
+                            400: '#38bdf8', 500: '#0ea5e9', 600: '#0284c7', 700: '#0369a1',
+                            800: '#075985', 900: '#0c4a6e',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .glass { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); }
+        .pulse-dot { animation: pulse 2s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .sidebar-item {
+            display: flex; align-items: center; justify-content: center;
+            width: 40px; height: 40px; border-radius: 12px;
+            color: #9ca3af; transition: all 0.2s ease;
+        }
+        .sidebar-item:hover { background: rgba(255,255,255,0.1); color: white; }
+        .sidebar-item.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white; box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        .chat-message { animation: slideIn 0.3s ease; }
+        @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .help-icon {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 16px; height: 16px; font-size: 10px; font-weight: 600;
+            color: #9ca3af; background: #f3f4f6; border: 1px solid #e5e7eb;
+            border-radius: 50%; cursor: help; transition: all 0.2s ease; position: relative;
+        }
+        .help-icon:hover { color: #6366f1; background: #eef2ff; border-color: #c7d2fe; }
+        .help-icon::after {
+            content: attr(data-tooltip); position: absolute; bottom: calc(100% + 8px);
+            left: 50%; transform: translateX(-50%); width: max-content; max-width: 280px;
+            padding: 10px 14px; background: #1f2937; color: white; font-size: 12px;
+            font-weight: 400; line-height: 1.5; border-radius: 8px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2); opacity: 0; visibility: hidden;
+            transition: all 0.2s ease; z-index: 100; pointer-events: none;
+        }
+        .help-icon::before {
+            content: ''; position: absolute; bottom: calc(100% + 2px);
+            left: 50%; transform: translateX(-50%); border: 6px solid transparent;
+            border-top-color: #1f2937; opacity: 0; visibility: hidden;
+            transition: all 0.2s ease; z-index: 100;
+        }
+        .help-icon:hover::after, .help-icon:hover::before { opacity: 1; visibility: visible; }
+        .dropdown-menu { display: none; }
+        .dropdown-menu.show { display: block; }
+        .notification {
+            animation: notificationIn 0.3s ease, notificationOut 0.3s ease 2.7s forwards;
+        }
+        @keyframes notificationIn { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes notificationOut { from { opacity: 1; } to { opacity: 0; } }
+    </style>
+</head>
+<body class="min-h-screen bg-gray-100 font-sans">
+    <!-- Sidebar -->
+    <aside class="fixed left-0 top-0 h-full w-16 bg-gray-900 flex flex-col items-center py-4 z-40">
+        <div class="w-10 h-10 bg-gradient-to-br from-primary-500 to-purple-600 rounded-xl flex items-center justify-center mb-8">
+            <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"></path>
+            </svg>
+        </div>
+        <nav class="flex flex-col items-center gap-2">
+            <a href="/" class="sidebar-item active" title="Buscador de Dominios">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
+                </svg>
+            </a>
+            <a href="/analyzer" class="sidebar-item" title="Analizador de Dominios">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                </svg>
+            </a>
+            <a href="/history" class="sidebar-item" title="Historial">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+            </a>
+        </nav>
+        <div class="mt-auto">
+            <div class="w-2 h-2 bg-green-400 rounded-full pulse-dot" title="Conectado"></div>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <div class="ml-16 h-screen flex flex-col">
+        <!-- Header -->
+        <header class="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <h1 class="text-xl font-semibold text-gray-900">Domain Finder</h1>
+                <span class="help-icon" data-tooltip="Escribe qué tipo de webs buscas y recibirás un CSV con los dominios encontrados. Cada búsqueda inicia una nueva conversación.">?</span>
+            </div>
+            <div class="flex items-center gap-3">
+                <button 
+                    id="new-chat-btn"
+                    onclick="startNewChat()"
+                    class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled
+                >
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                    </svg>
+                    Nuevo Chat
+                </button>
+            </div>
+        </header>
+
+        <!-- Chat Container -->
+        <div id="chat-container" class="flex-1 overflow-y-auto px-6 py-6">
+            <!-- Welcome Message -->
+            <div id="welcome-message" class="max-w-3xl mx-auto text-center py-16">
+                <div class="w-20 h-20 bg-gradient-to-br from-primary-100 to-purple-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <svg class="w-10 h-10 text-primary-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                    </svg>
+                </div>
+                <h2 class="text-2xl font-bold text-gray-900 mb-3">¿Qué tipo de webs buscas?</h2>
+                <p class="text-gray-500 max-w-md mx-auto mb-8">
+                    Describe el tipo de negocio, producto o servicio y recibirás un archivo CSV con los dominios encontrados.
+                </p>
+                <div class="flex flex-wrap justify-center gap-2">
+                    <button onclick="setPrompt('ecommerce de cosmética natural')" class="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-full text-sm text-gray-700 transition-colors">
+                        ecommerce de cosmética natural
+                    </button>
+                    <button onclick="setPrompt('agencia de marketing digital en Madrid')" class="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-full text-sm text-gray-700 transition-colors">
+                        agencia de marketing en Madrid
+                    </button>
+                    <button onclick="setPrompt('SaaS de gestión de proyectos')" class="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-full text-sm text-gray-700 transition-colors">
+                        SaaS de gestión
+                    </button>
+                </div>
+            </div>
+
+            <!-- Messages Container -->
+            <div id="messages-container" class="max-w-3xl mx-auto space-y-6">
+                <!-- Messages will be inserted here -->
+            </div>
+        </div>
+
+        <!-- Input Area -->
+        <div class="border-t border-gray-200 bg-white px-6 py-4">
+            <div class="max-w-3xl mx-auto">
+                <!-- Extraction Options -->
+                <div class="flex items-center gap-4 mb-3">
+                    <span class="text-xs text-gray-500">Extraer:</span>
+                    <label class="flex items-center gap-1.5 cursor-pointer">
+                        <input type="checkbox" id="extract-email" checked class="w-3.5 h-3.5 text-primary-600 rounded focus:ring-primary-500">
+                        <span class="text-xs text-gray-600">Email</span>
+                    </label>
+                    <label class="flex items-center gap-1.5 cursor-pointer">
+                        <input type="checkbox" id="extract-phone" class="w-3.5 h-3.5 text-primary-600 rounded focus:ring-primary-500">
+                        <span class="text-xs text-gray-600">Teléfono</span>
+                    </label>
+                    <label class="flex items-center gap-1.5 cursor-pointer">
+                        <input type="checkbox" id="extract-social" class="w-3.5 h-3.5 text-primary-600 rounded focus:ring-primary-500">
+                        <span class="text-xs text-gray-600">RRSS</span>
+                    </label>
+                    <div class="ml-auto flex items-center gap-2">
+                        <span class="text-xs text-gray-500">Resultados:</span>
+                        <select id="max-results" class="text-xs border border-gray-200 rounded px-2 py-1 focus:border-primary-500 outline-none">
+                            <option value="10">10</option>
+                            <option value="20" selected>20</option>
+                            <option value="30">30</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <!-- Input -->
+                <div class="flex gap-3">
+                    <input 
+                        type="text" 
+                        id="prompt-input"
+                        placeholder="Describe qué tipo de webs buscas..."
+                        class="flex-1 px-4 py-3 border border-gray-200 rounded-xl focus:border-primary-500 focus:ring-0 outline-none transition-colors"
+                        onkeypress="if(event.key === 'Enter') sendMessage()"
+                    >
+                    <button 
+                        id="send-btn"
+                        onclick="sendMessage()"
+                        class="px-6 py-3 bg-primary-600 text-white font-medium rounded-xl hover:bg-primary-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                    >
+                        <span id="send-text">Buscar</span>
+                        <svg id="send-icon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path>
+                        </svg>
+                        <svg id="send-loading" class="hidden animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification -->
+    <div id="notification" class="hidden fixed top-4 right-4 z-50">
+        <div class="notification bg-gray-900 text-white px-4 py-3 rounded-lg shadow-lg flex items-center gap-2">
+            <svg class="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+            </svg>
+            <span id="notification-text">Chat guardado en el historial</span>
+        </div>
+    </div>
+
+    <script>
+        let currentConversation = {
+            id: null,
+            messages: [],
+            results: []
+        };
+        let pollingInterval = null;
+        let isSearching = false;
+
+        function setPrompt(text) {
+            document.getElementById('prompt-input').value = text;
+            document.getElementById('prompt-input').focus();
+        }
+
+        function showNotification(text) {
+            const notif = document.getElementById('notification');
+            document.getElementById('notification-text').textContent = text;
+            notif.classList.remove('hidden');
+            setTimeout(() => notif.classList.add('hidden'), 3000);
+        }
+
+        function startNewChat() {
+            if (currentConversation.messages.length === 0) {
+                return;
+            }
+
+            // Save current conversation to history
+            saveToHistory();
+            showNotification('Chat guardado en el historial');
+
+            // Reset conversation
+            currentConversation = { id: Date.now(), messages: [], results: [] };
+            document.getElementById('messages-container').innerHTML = '';
+            document.getElementById('welcome-message').classList.remove('hidden');
+            document.getElementById('new-chat-btn').disabled = true;
+        }
+
+        function saveToHistory() {
+            // Save to localStorage for now (can be replaced with Supabase)
+            const history = JSON.parse(localStorage.getItem('searchHistory') || '[]');
+            history.unshift({
+                id: currentConversation.id,
+                timestamp: new Date().toISOString(),
+                messages: currentConversation.messages,
+                results: currentConversation.results
+            });
+            // Keep only last 50 conversations
+            localStorage.setItem('searchHistory', JSON.stringify(history.slice(0, 50)));
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('prompt-input');
+            const prompt = input.value.trim();
+            
+            if (!prompt || isSearching) return;
+
+            // Hide welcome, show messages
+            document.getElementById('welcome-message').classList.add('hidden');
+            document.getElementById('new-chat-btn').disabled = false;
+
+            // Add user message
+            addMessage('user', prompt);
+            input.value = '';
+
+            // Start search
+            isSearching = true;
+            updateSendButton(true);
+
+            // Add loading message
+            const loadingId = addLoadingMessage();
+
+            // Get options
+            const extractFields = [];
+            if (document.getElementById('extract-email').checked) extractFields.push('email');
+            if (document.getElementById('extract-phone').checked) extractFields.push('phone');
+            if (document.getElementById('extract-social').checked) extractFields.push('social');
+            const maxResults = parseInt(document.getElementById('max-results').value);
+
+            try {
+                const response = await fetch('/api/search', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt, max_results: maxResults, extract_fields: extractFields })
+                });
+
+                if (response.ok) {
+                    startPolling(loadingId, prompt);
+                } else {
+                    removeLoadingMessage(loadingId);
+                    addMessage('error', 'Error al iniciar la búsqueda');
+                    isSearching = false;
+                    updateSendButton(false);
+                }
+            } catch (e) {
+                removeLoadingMessage(loadingId);
+                addMessage('error', 'Error de conexión');
+                isSearching = false;
+                updateSendButton(false);
+            }
+        }
+
+        function addMessage(type, content, resultData = null) {
+            const container = document.getElementById('messages-container');
+            const messageId = Date.now();
+            
+            const message = document.createElement('div');
+            message.className = 'chat-message';
+            message.id = `msg-${messageId}`;
+
+            if (type === 'user') {
+                message.innerHTML = `
+                    <div class="flex justify-end">
+                        <div class="bg-primary-600 text-white px-4 py-3 rounded-2xl rounded-tr-md max-w-xl">
+                            ${content}
+                        </div>
+                    </div>
+                `;
+                currentConversation.messages.push({ type: 'user', content });
+            } else if (type === 'result') {
+                const resultId = Date.now();
+                message.innerHTML = `
+                    <div class="flex justify-start">
+                        <div class="bg-white border border-gray-200 rounded-2xl rounded-tl-md shadow-sm max-w-xl w-full">
+                            <div class="p-4">
+                                <div class="flex items-start justify-between gap-4">
+                                    <div class="flex-1">
+                                        <div class="flex items-center gap-2 mb-2">
+                                            <svg class="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                            </svg>
+                                            <span class="font-medium text-gray-900">Búsqueda completada</span>
+                                        </div>
+                                        <p class="text-sm text-gray-600 mb-3">${content}</p>
+                                        <div class="flex items-center gap-2 text-xs text-gray-500">
+                                            <span>${resultData ? resultData.count : 0} dominios encontrados</span>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Actions -->
+                                    <div class="flex items-center gap-2">
+                                        <button onclick="downloadResultCSV(${resultId})" class="px-3 py-2 bg-green-500 hover:bg-green-600 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-1">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                                            </svg>
+                                            CSV
+                                        </button>
+                                        
+                                        <!-- Menu Button -->
+                                        <div class="relative">
+                                            <button onclick="toggleMenu(${resultId})" class="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
+                                                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                                                    <circle cx="12" cy="6" r="2"></circle>
+                                                    <circle cx="12" cy="12" r="2"></circle>
+                                                    <circle cx="12" cy="18" r="2"></circle>
+                                                </svg>
+                                            </button>
+                                            
+                                            <!-- Dropdown Menu -->
+                                            <div id="menu-${resultId}" class="dropdown-menu absolute right-0 top-full mt-1 w-56 bg-white border border-gray-200 rounded-lg shadow-lg z-50">
+                                                <div class="py-1">
+                                                    <button onclick="dontSaveToHistory(${resultId})" class="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 flex items-center gap-2">
+                                                        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"></path>
+                                                        </svg>
+                                                        No guardar en historial
+                                                    </button>
+                                                    
+                                                    <div class="border-t border-gray-100 my-1"></div>
+                                                    
+                                                    <div class="px-4 py-2">
+                                                        <p class="text-xs text-gray-500 mb-2">Volver a hacer búsqueda:</p>
+                                                        <button onclick="redoSearchDiscard(${resultId})" class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 rounded flex items-center gap-2">
+                                                            <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                                            </svg>
+                                                            Descartar y repetir
+                                                        </button>
+                                                        <button onclick="redoSearchSave(${resultId})" class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 rounded flex items-center gap-2">
+                                                            <svg class="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                                            </svg>
+                                                            Guardar y repetir
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                
+                // Store result data
+                if (resultData) {
+                    currentConversation.results.push({ id: resultId, data: resultData });
+                }
+            } else if (type === 'error') {
+                message.innerHTML = `
+                    <div class="flex justify-start">
+                        <div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-2xl rounded-tl-md max-w-xl">
+                            ${content}
+                        </div>
+                    </div>
+                `;
+            }
+
+            container.appendChild(message);
+            container.scrollTop = container.scrollHeight;
+            
+            return messageId;
+        }
+
+        function addLoadingMessage() {
+            const container = document.getElementById('messages-container');
+            const messageId = Date.now();
+            
+            const message = document.createElement('div');
+            message.className = 'chat-message';
+            message.id = `loading-${messageId}`;
+            message.innerHTML = `
+                <div class="flex justify-start">
+                    <div class="bg-white border border-gray-200 px-4 py-3 rounded-2xl rounded-tl-md">
+                        <div class="flex items-center gap-3">
+                            <svg class="animate-spin w-5 h-5 text-primary-600" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            <div>
+                                <p class="text-sm font-medium text-gray-900">Buscando dominios...</p>
+                                <p id="loading-status-${messageId}" class="text-xs text-gray-500">Iniciando</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            container.appendChild(message);
+            container.scrollTop = container.scrollHeight;
+            
+            return messageId;
+        }
+
+        function removeLoadingMessage(id) {
+            const el = document.getElementById(`loading-${id}`);
+            if (el) el.remove();
+        }
+
+        function updateLoadingStatus(id, status) {
+            const el = document.getElementById(`loading-status-${id}`);
+            if (el) el.textContent = status;
+        }
+
+        function updateSendButton(loading) {
+            document.getElementById('send-btn').disabled = loading;
+            document.getElementById('send-text').classList.toggle('hidden', loading);
+            document.getElementById('send-icon').classList.toggle('hidden', loading);
+            document.getElementById('send-loading').classList.toggle('hidden', !loading);
+        }
+
+        function startPolling(loadingId, prompt) {
+            pollingInterval = setInterval(async () => {
+                try {
+                    const response = await fetch('/api/status');
+                    const status = await response.json();
+
+                    updateLoadingStatus(loadingId, `${status.status} (${status.progress}%)`);
+
+                    if (!status.is_searching && status.progress >= 100) {
+                        stopPolling();
+                        removeLoadingMessage(loadingId);
+                        
+                        // Get results
+                        const resultsResp = await fetch('/api/results');
+                        const resultsData = await resultsResp.json();
+                        
+                        addMessage('result', prompt, {
+                            count: resultsData.results ? resultsData.results.length : 0,
+                            results: resultsData.results,
+                            analysis: resultsData.analysis
+                        });
+                        
+                        isSearching = false;
+                        updateSendButton(false);
+                    }
+                } catch (e) {
+                    console.error('Polling error:', e);
+                }
+            }, 500);
+        }
+
+        function stopPolling() {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+            }
+        }
+
+        function toggleMenu(resultId) {
+            const menu = document.getElementById(`menu-${resultId}`);
+            // Close all other menus
+            document.querySelectorAll('.dropdown-menu').forEach(m => {
+                if (m.id !== `menu-${resultId}`) m.classList.remove('show');
+            });
+            menu.classList.toggle('show');
+        }
+
+        // Close menus when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.relative')) {
+                document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('show'));
+            }
+        });
+
+        function downloadResultCSV(resultId) {
+            // Find result data
+            const result = currentConversation.results.find(r => r.id === resultId);
+            if (!result || !result.data.results) {
+                window.location.href = '/api/export/csv';
+                return;
+            }
+            
+            // Generate CSV
+            const rows = [['Domain', 'URL', 'Confidence', 'Email', 'Phone']];
+            result.data.results.forEach(r => {
+                const contact = r.contact || {};
+                rows.push([
+                    r.domain,
+                    r.url,
+                    r.confidence,
+                    contact.email || '',
+                    contact.phone || ''
+                ]);
+            });
+            
+            const csv = rows.map(row => row.map(cell => `"${cell}"`).join(',')).join('\n');
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `domains_${resultId}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+            
+            toggleMenu(resultId);
+        }
+
+        function dontSaveToHistory(resultId) {
+            // Remove from current conversation results
+            currentConversation.results = currentConversation.results.filter(r => r.id !== resultId);
+            showNotification('Búsqueda eliminada del historial');
+            toggleMenu(resultId);
+        }
+
+        function redoSearchDiscard(resultId) {
+            // Find the original prompt
+            const result = currentConversation.results.find(r => r.id === resultId);
+            if (result) {
+                // Remove from results (don't save to history)
+                currentConversation.results = currentConversation.results.filter(r => r.id !== resultId);
+                
+                // Set prompt and search again
+                document.getElementById('prompt-input').value = currentConversation.messages.find(m => m.type === 'user')?.content || '';
+            }
+            showNotification('Búsqueda descartada. Puedes volver a buscar.');
+            toggleMenu(resultId);
+        }
+
+        function redoSearchSave(resultId) {
+            // Save current results to history first
+            saveToHistory();
+            showNotification('Resultados guardados. Puedes repetir la búsqueda.');
+            toggleMenu(resultId);
+        }
+    </script>
+</body>
+</html>

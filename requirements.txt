@@ -1,0 +1,28 @@
+# Web Search & Analysis
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+# Note: wappalyzergo binary is used for tech detection (via subprocess)
+
+# Browser Automation (Contact Extraction)
+playwright>=1.40.0
+# Note: Run 'playwright install chromium' after pip install
+
+# AI/LLM
+google-generativeai>=0.3.0
+
+# Async support
+aiohttp>=3.9.0
+asyncio-throttle>=1.0.2
+
+# Web Interface
+flask>=3.0.0
+flask-cors>=4.0.0
+
+# Utils
+python-dotenv>=1.0.0
+rich>=13.7.0
+pydantic>=2.5.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.23.0

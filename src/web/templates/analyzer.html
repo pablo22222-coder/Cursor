@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bulk Analyzer - Domain Finder</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Inter', 'sans-serif'] },
+                    colors: {
+                        primary: { 50: '#f0f9ff', 100: '#e0f2fe', 200: '#bae6fd', 300: '#7dd3fc', 400: '#38bdf8', 500: '#0ea5e9', 600: '#0284c7', 700: '#0369a1', 800: '#075985', 900: '#0c4a6e' }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .glass { background: rgba(255, 255, 255, 0.98); backdrop-filter: blur(20px); }
+        .sidebar-item { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 12px; color: #6b7280; transition: all 0.2s ease; }
+        .sidebar-item:hover { background: #f3f4f6; color: #111827; }
+        .sidebar-item.active { background: linear-gradient(135deg, #0ea5e9 0%, #6366f1 100%); color: white; box-shadow: 0 4px 12px rgba(14, 165, 233, 0.3); }
+        .help-icon { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; font-size: 10px; font-weight: 600; color: #9ca3af; background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 50%; cursor: help; position: relative; }
+        .help-icon:hover { color: #6366f1; background: #eef2ff; border-color: #c7d2fe; }
+        .help-icon::after { content: attr(data-tooltip); position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); width: max-content; max-width: 260px; padding: 8px 12px; background: #1f2937; color: white; font-size: 11px; line-height: 1.4; border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); opacity: 0; visibility: hidden; transition: all 0.15s ease; z-index: 100; pointer-events: none; }
+        .help-icon::before { content: ''; position: absolute; bottom: calc(100% + 2px); left: 50%; transform: translateX(-50%); border: 5px solid transparent; border-top-color: #1f2937; opacity: 0; visibility: hidden; z-index: 100; }
+        .help-icon:hover::after, .help-icon:hover::before { opacity: 1; visibility: visible; }
+        .result-row { transition: all 0.15s ease; }
+        .result-row:hover { background: #f9fafb; }
+        .progress-bar { transition: width 0.3s ease; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .animate-pulse-slow { animation: pulse 2s infinite; }
+    </style>
+</head>
+<body class="min-h-screen bg-gray-50 font-sans">
+    <!-- Sidebar -->
+    <aside class="fixed left-0 top-0 h-full w-16 bg-white border-r border-gray-200 flex flex-col items-center py-4 z-40">
+        <div class="w-10 h-10 bg-gradient-to-br from-primary-500 to-indigo-600 rounded-xl flex items-center justify-center mb-8">
+            <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"></path>
+            </svg>
+        </div>
+        <nav class="flex flex-col items-center gap-2">
+            <a href="/" class="sidebar-item" title="Buscador">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
+                </svg>
+            </a>
+            <a href="/analyzer" class="sidebar-item active" title="Bulk Analyzer">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                </svg>
+            </a>
+        </nav>
+        <div class="mt-auto">
+            <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse-slow"></div>
+        </div>
+    </aside>
+
+    <!-- Main -->
+    <div class="ml-16 min-h-screen">
+        <!-- Header -->
+        <header class="bg-white border-b border-gray-200 px-8 py-6">
+            <div class="max-w-5xl mx-auto">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h1 class="text-2xl font-bold text-gray-900">Bulk Analyzer</h1>
+                        <p class="text-gray-500 mt-1 flex items-center gap-2">
+                            Análisis técnico masivo de dominios
+                            <span class="help-icon" data-tooltip="Analiza hasta 30 dominios simultáneamente con 3 workers en paralelo. Extrae tecnologías, contactos, SSL y metadata.">?</span>
+                        </p>
+                    </div>
+                    <div class="flex items-center gap-2 text-sm">
+                        <span class="px-3 py-1 bg-primary-50 text-primary-700 rounded-full font-medium">3 Workers</span>
+                        <span class="px-3 py-1 bg-gray-100 text-gray-600 rounded-full">Máx. 30 dominios</span>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Content -->
+        <main class="max-w-5xl mx-auto px-8 py-8">
+            <!-- Input Section -->
+            <div id="input-section" class="glass rounded-2xl border border-gray-200 p-8 mb-8">
+                <div class="grid lg:grid-cols-2 gap-8">
+                    <!-- Textarea -->
+                    <div>
+                        <label class="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2 block">
+                            Dominios a analizar
+                            <span class="help-icon" data-tooltip="Escribe un dominio por línea. Máximo 30 dominios serán procesados.">?</span>
+                        </label>
+                        <textarea 
+                            id="domains-input"
+                            rows="12"
+                            placeholder="ejemplo.com
+tienda-online.es
+mi-empresa.com
+
+(1 dominio por línea)"
+                            class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:border-primary-500 focus:bg-white focus:ring-2 focus:ring-primary-100 outline-none transition-all resize-none font-mono text-sm"
+                        ></textarea>
+                        <div class="flex items-center justify-between mt-3">
+                            <p id="domain-count" class="text-sm text-gray-500">0 / 30 dominios</p>
+                            <p id="limit-warning" class="hidden text-sm text-amber-600 font-medium">⚠️ Máximo 30 dominios</p>
+                        </div>
+                    </div>
+                    
+                    <!-- CSV Upload -->
+                    <div>
+                        <label class="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2 block">
+                            O carga un archivo CSV
+                            <span class="help-icon" data-tooltip="Sube un CSV con dominios. Solo los primeros 30 serán procesados.">?</span>
+                        </label>
+                        <div 
+                            id="csv-dropzone"
+                            class="h-[280px] border-2 border-dashed border-gray-300 rounded-xl flex flex-col items-center justify-center hover:border-primary-400 hover:bg-primary-50/30 transition-all cursor-pointer"
+                            onclick="document.getElementById('csv-file').click()"
+                        >
+                            <input type="file" id="csv-file" accept=".csv" class="hidden" onchange="handleCSV(event)">
+                            <div class="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4">
+                                <svg class="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                                </svg>
+                            </div>
+                            <p class="text-gray-700 font-medium">Arrastra o haz clic</p>
+                            <p class="text-gray-400 text-sm mt-1">Archivos .csv</p>
+                        </div>
+                        <p id="csv-status" class="text-sm mt-3 hidden"></p>
+                    </div>
+                </div>
+                
+                <!-- Analyze Button -->
+                <div class="mt-8 flex justify-center">
+                    <button 
+                        id="analyze-btn"
+                        onclick="startAnalysis()"
+                        class="px-8 py-4 bg-gradient-to-r from-primary-600 to-indigo-600 text-white font-semibold rounded-xl hover:from-primary-700 hover:to-indigo-700 transition-all shadow-lg shadow-primary-500/25 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-3"
+                    >
+                        <svg id="btn-icon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                        </svg>
+                        <span id="btn-text">Iniciar Análisis</span>
+                        <svg id="btn-spinner" class="hidden animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Progress Section -->
+            <div id="progress-section" class="hidden glass rounded-2xl border border-gray-200 p-8 mb-8">
+                <div class="flex items-center justify-between mb-4">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 bg-primary-100 rounded-xl flex items-center justify-center">
+                            <svg class="w-5 h-5 text-primary-600 animate-spin" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                            </svg>
+                        </div>
+                        <div>
+                            <p id="progress-status" class="font-medium text-gray-900">Procesando...</p>
+                            <p id="progress-detail" class="text-sm text-gray-500">0 / 0 dominios</p>
+                        </div>
+                    </div>
+                    <span id="progress-percent" class="text-3xl font-bold text-primary-600">0%</span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+                    <div id="progress-bar" class="progress-bar bg-gradient-to-r from-primary-500 to-indigo-500 h-3 rounded-full" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <!-- Results Section -->
+            <div id="results-section" class="hidden">
+                <!-- Results Header -->
+                <div class="flex items-center justify-between mb-6">
+                    <div>
+                        <h2 class="text-xl font-bold text-gray-900">Resultados</h2>
+                        <p id="results-count" class="text-gray-500">0 dominios analizados</p>
+                    </div>
+                    <button onclick="downloadAllCSV()" class="px-4 py-2 bg-green-500 hover:bg-green-600 text-white font-medium rounded-lg transition-colors flex items-center gap-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                        </svg>
+                        Descargar Todo (CSV)
+                    </button>
+                </div>
+
+                <!-- Results Table -->
+                <div class="glass rounded-2xl border border-gray-200 overflow-hidden">
+                    <table class="w-full">
+                        <thead class="bg-gray-50 border-b border-gray-200">
+                            <tr>
+                                <th class="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">#</th>
+                                <th class="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Dominio</th>
+                                <th class="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Estado</th>
+                                <th class="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Contacto</th>
+                                <th class="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Techs</th>
+                                <th class="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody id="results-table" class="divide-y divide-gray-100">
+                            <!-- Results rows will be inserted here -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Pagination -->
+                <div id="pagination" class="hidden mt-6 flex items-center justify-center gap-3">
+                    <button onclick="prevPage()" id="prev-btn" class="px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+                        Anterior
+                    </button>
+                    <div class="flex items-center gap-1">
+                        <span id="page-info" class="px-4 py-2 text-sm text-gray-600">1 / 1</span>
+                    </div>
+                    <button onclick="nextPage()" id="next-btn" class="px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1">
+                        Siguiente
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                    </button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const MAX_DOMAINS = 30;
+        const PER_PAGE = 10;
+        let allResults = [];
+        let currentPage = 1;
+        let pollingInterval = null;
+
+        // Domain count update
+        const input = document.getElementById('domains-input');
+        input.addEventListener('input', updateCount);
+
+        function updateCount() {
+            const lines = input.value.split('\n').filter(l => l.trim());
+            const count = lines.length;
+            document.getElementById('domain-count').textContent = `${Math.min(count, MAX_DOMAINS)} / ${MAX_DOMAINS} dominios`;
+            
+            if (count > MAX_DOMAINS) {
+                document.getElementById('domain-count').classList.add('text-amber-600', 'font-medium');
+                document.getElementById('limit-warning').classList.remove('hidden');
+            } else {
+                document.getElementById('domain-count').classList.remove('text-amber-600', 'font-medium');
+                document.getElementById('limit-warning').classList.add('hidden');
+            }
+        }
+
+        function handleCSV(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const lines = e.target.result.split('\n').map(l => l.trim()).filter(l => l && !l.toLowerCase().includes('domain'));
+                const domains = [];
+                
+                lines.forEach(line => {
+                    const parts = line.split(/[,;|\t]/);
+                    parts.forEach(p => {
+                        const d = p.trim().replace(/["']/g, '');
+                        if (d && d.includes('.') && !d.includes(' ')) domains.push(d);
+                    });
+                });
+
+                const limited = domains.slice(0, MAX_DOMAINS);
+                input.value = limited.join('\n');
+                updateCount();
+
+                const status = document.getElementById('csv-status');
+                status.classList.remove('hidden');
+                if (domains.length > MAX_DOMAINS) {
+                    status.textContent = `⚠️ ${domains.length} dominios encontrados. Solo se procesarán los primeros ${MAX_DOMAINS}.`;
+                    status.className = 'text-sm mt-3 text-amber-600';
+                } else {
+                    status.textContent = `✓ ${domains.length} dominios cargados.`;
+                    status.className = 'text-sm mt-3 text-green-600';
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        // Drag & drop
+        const dz = document.getElementById('csv-dropzone');
+        dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('border-primary-500', 'bg-primary-50'); });
+        dz.addEventListener('dragleave', () => { dz.classList.remove('border-primary-500', 'bg-primary-50'); });
+        dz.addEventListener('drop', e => {
+            e.preventDefault();
+            dz.classList.remove('border-primary-500', 'bg-primary-50');
+            const file = e.dataTransfer.files[0];
+            if (file?.name.endsWith('.csv')) handleCSV({ target: { files: [file] } });
+        });
+
+        async function startAnalysis() {
+            const text = input.value.trim();
+            if (!text) return alert('Introduce al menos un dominio');
+
+            const domains = text.split('\n').map(d => d.trim()).filter(d => d).slice(0, MAX_DOMAINS);
+            if (!domains.length) return alert('No hay dominios válidos');
+
+            // UI
+            document.getElementById('analyze-btn').disabled = true;
+            document.getElementById('btn-icon').classList.add('hidden');
+            document.getElementById('btn-text').textContent = 'Analizando...';
+            document.getElementById('btn-spinner').classList.remove('hidden');
+            document.getElementById('input-section').classList.add('opacity-50', 'pointer-events-none');
+            document.getElementById('progress-section').classList.remove('hidden');
+            document.getElementById('results-section').classList.add('hidden');
+
+            try {
+                const res = await fetch('/api/analyzer/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ domains })
+                });
+
+                if (res.ok) startPolling();
+                else {
+                    alert('Error al iniciar');
+                    resetUI();
+                }
+            } catch (e) {
+                alert('Error de conexión');
+                resetUI();
+            }
+        }
+
+        function startPolling() {
+            pollingInterval = setInterval(async () => {
+                try {
+                    const res = await fetch('/api/analyzer/status');
+                    const s = await res.json();
+
+                    document.getElementById('progress-bar').style.width = s.progress + '%';
+                    document.getElementById('progress-percent').textContent = s.progress + '%';
+                    document.getElementById('progress-status').textContent = s.status || 'Procesando...';
+                    document.getElementById('progress-detail').textContent = s.detail || '';
+
+                    if (!s.is_analyzing && s.progress >= 100) {
+                        clearInterval(pollingInterval);
+                        await loadResults();
+                        resetUI();
+                    }
+                } catch (e) {}
+            }, 500);
+        }
+
+        async function loadResults() {
+            const res = await fetch('/api/analyzer/results');
+            const data = await res.json();
+            allResults = data.results || [];
+            currentPage = 1;
+            if (allResults.length) displayResults();
+        }
+
+        function displayResults() {
+            document.getElementById('progress-section').classList.add('hidden');
+            document.getElementById('results-section').classList.remove('hidden');
+            document.getElementById('results-count').textContent = `${allResults.length} dominios analizados`;
+
+            const totalPages = Math.ceil(allResults.length / PER_PAGE);
+            const start = (currentPage - 1) * PER_PAGE;
+            const pageData = allResults.slice(start, start + PER_PAGE);
+
+            const tbody = document.getElementById('results-table');
+            tbody.innerHTML = '';
+
+            pageData.forEach((r, i) => {
+                const idx = start + i + 1;
+                const hasEmail = r.contact?.email;
+                const hasPhone = r.contact?.phone;
+                const techCount = r.technologies?.length || 0;
+
+                const row = document.createElement('tr');
+                row.className = 'result-row';
+                row.innerHTML = `
+                    <td class="px-6 py-4 text-sm text-gray-500">${idx}</td>
+                    <td class="px-6 py-4">
+                        <div class="font-medium text-gray-900">${r.domain}</div>
+                        <div class="text-xs text-gray-400">${r.final_url || r.url}</div>
+                    </td>
+                    <td class="px-6 py-4">
+                        ${r.success 
+                            ? `<span class="px-2 py-1 bg-green-100 text-green-700 text-xs font-medium rounded-full">${r.http_status || 'OK'}</span>`
+                            : `<span class="px-2 py-1 bg-red-100 text-red-700 text-xs font-medium rounded-full">Error</span>`
+                        }
+                    </td>
+                    <td class="px-6 py-4">
+                        <div class="flex items-center gap-2">
+                            ${hasEmail ? '<span class="w-2 h-2 bg-blue-500 rounded-full" title="Email"></span>' : '<span class="w-2 h-2 bg-gray-200 rounded-full"></span>'}
+                            ${hasPhone ? '<span class="w-2 h-2 bg-green-500 rounded-full" title="Teléfono"></span>' : '<span class="w-2 h-2 bg-gray-200 rounded-full"></span>'}
+                        </div>
+                    </td>
+                    <td class="px-6 py-4">
+                        <span class="text-sm text-gray-600">${techCount}</span>
+                    </td>
+                    <td class="px-6 py-4 text-right">
+                        <div class="flex items-center justify-end gap-2">
+                            <button onclick="downloadSingle(${start + i})" class="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors" title="Descargar CSV">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                            </button>
+                            <a href="/inspect/${encodeURIComponent(r.domain)}" target="_blank" class="px-3 py-1.5 bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium rounded-lg transition-colors">
+                                Inspeccionar
+                            </a>
+                        </div>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+
+            // Pagination
+            if (totalPages > 1) {
+                document.getElementById('pagination').classList.remove('hidden');
+                document.getElementById('page-info').textContent = `${currentPage} / ${totalPages}`;
+                document.getElementById('prev-btn').disabled = currentPage === 1;
+                document.getElementById('next-btn').disabled = currentPage === totalPages;
+            } else {
+                document.getElementById('pagination').classList.add('hidden');
+            }
+        }
+
+        function prevPage() { if (currentPage > 1) { currentPage--; displayResults(); } }
+        function nextPage() { const tp = Math.ceil(allResults.length / PER_PAGE); if (currentPage < tp) { currentPage++; displayResults(); } }
+
+        function downloadSingle(idx) {
+            const r = allResults[idx];
+            const csv = [
+                ['Domain', 'URL', 'HTTP', 'Email', 'Phone', 'Technologies'],
+                [r.domain, r.url, r.http_status || '', r.contact?.email || '', r.contact?.phone || '', (r.technologies || []).join('; ')]
+            ].map(row => row.map(c => `"${c}"`).join(',')).join('\n');
+
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `${r.domain.replace(/[^a-z0-9]/gi, '_')}.csv`;
+            a.click();
+        }
+
+        function downloadAllCSV() {
+            const rows = [['Domain', 'URL', 'HTTP', 'SSL', 'Email', 'Phone', 'Technologies', 'Language']];
+            allResults.forEach(r => {
+                rows.push([
+                    r.domain,
+                    r.url,
+                    r.http_status || '',
+                    r.ssl?.valid ? 'Valid' : 'Invalid',
+                    r.contact?.email || '',
+                    r.contact?.phone || '',
+                    (r.technologies || []).join('; '),
+                    r.language || ''
+                ]);
+            });
+
+            const csv = rows.map(row => row.map(c => `"${c}"`).join(',')).join('\n');
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'bulk_analysis.csv';
+            a.click();
+        }
+
+        function resetUI() {
+            document.getElementById('analyze-btn').disabled = false;
+            document.getElementById('btn-icon').classList.remove('hidden');
+            document.getElementById('btn-text').textContent = 'Iniciar Análisis';
+            document.getElementById('btn-spinner').classList.add('hidden');
+            document.getElementById('input-section').classList.remove('opacity-50', 'pointer-events-none');
+        }
+    </script>
+</body>
+</html>
