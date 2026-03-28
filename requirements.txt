@@ -1,5 +1,6 @@
 # Web Search & Analysis
 requests>=2.31.0
+beautifulsoup4>=4.12.0
 # Note: wappalyzergo binary is used for tech detection (via subprocess)
 
 # Browser Automation (Contact Extraction)
