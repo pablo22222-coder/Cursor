@@ -161,7 +161,7 @@
         <div class="border-t border-gray-200 bg-white px-6 py-4">
             <div class="max-w-3xl mx-auto">
                 <!-- Extraction Options -->
-                <div class="flex items-center gap-4 mb-3">
+                <div class="flex items-center gap-4 mb-3 flex-wrap">
                     <span class="text-xs text-gray-500">Extraer:</span>
                     <label class="flex items-center gap-1.5 cursor-pointer">
                         <input type="checkbox" id="extract-email" checked class="w-3.5 h-3.5 text-primary-600 rounded focus:ring-primary-500">
@@ -175,6 +175,27 @@
                         <input type="checkbox" id="extract-social" class="w-3.5 h-3.5 text-primary-600 rounded focus:ring-primary-500">
                         <span class="text-xs text-gray-600">RRSS</span>
                     </label>
+
+                    <!-- Extraction mode toggle -->
+                    <div class="flex items-center gap-1 ml-2 bg-gray-100 rounded-lg p-0.5">
+                        <button
+                            id="mode-fast"
+                            onclick="setExtractionMode('fast')"
+                            title="Solo Katana · máximo 15s por dominio"
+                            class="flex items-center gap-1 px-2.5 py-1 text-xs rounded-md font-medium transition-all bg-white text-primary-700 shadow-sm"
+                        >
+                            ⚡ Rápido
+                        </button>
+                        <button
+                            id="mode-precise"
+                            onclick="setExtractionMode('precise')"
+                            title="Katana + Playwright · más emails encontrados"
+                            class="flex items-center gap-1 px-2.5 py-1 text-xs rounded-md font-medium transition-all text-gray-500 hover:text-gray-700"
+                        >
+                            🔍 Preciso
+                        </button>
+                    </div>
+
                     <div class="ml-auto flex items-center gap-2">
                         <span class="text-xs text-gray-500">Resultados:</span>
                         <select id="max-results" class="text-xs border border-gray-200 rounded px-2 py-1 focus:border-primary-500 outline-none">
@@ -231,6 +252,26 @@
         };
         let pollingInterval = null;
         let isSearching = false;
+        let extractionMode = 'fast'; // 'fast' | 'precise'
+
+        function setExtractionMode(mode) {
+            extractionMode = mode;
+            const fastBtn    = document.getElementById('mode-fast');
+            const preciseBtn = document.getElementById('mode-precise');
+            const activeClass   = ['bg-white', 'text-primary-700', 'shadow-sm'];
+            const inactiveClass = ['text-gray-500', 'hover:text-gray-700'];
+            if (mode === 'fast') {
+                fastBtn.classList.add(...activeClass);
+                fastBtn.classList.remove(...inactiveClass);
+                preciseBtn.classList.remove(...activeClass);
+                preciseBtn.classList.add(...inactiveClass);
+            } else {
+                preciseBtn.classList.add(...activeClass);
+                preciseBtn.classList.remove(...inactiveClass);
+                fastBtn.classList.remove(...activeClass);
+                fastBtn.classList.add(...inactiveClass);
+            }
+        }
 
         function setPrompt(text) {
             document.getElementById('prompt-input').value = text;
@@ -305,7 +346,12 @@
                 const response = await fetch('/api/search', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ prompt, max_results: maxResults, extract_fields: extractFields })
+                    body: JSON.stringify({
+                        prompt,
+                        max_results: maxResults,
+                        extract_fields: extractFields,
+                        extraction_mode: extractionMode
+                    })
                 });
 
                 if (response.ok) {

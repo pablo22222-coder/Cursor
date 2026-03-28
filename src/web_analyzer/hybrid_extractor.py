@@ -37,7 +37,8 @@ except ImportError:
 
 
 MAX_WORKERS = 3
-KATANA_TIMEOUT = 7  # seconds - ultra fast
+KATANA_TIMEOUT = 7        # seconds - modo preciso (Katana interno)
+KATANA_FAST_TIMEOUT = 15  # seconds - modo rápido (timeout total por dominio)
 PLAYWRIGHT_TIMEOUT = 15000  # ms
 # Timeout por pestaña individual dentro del worker (más ajustado)
 TAB_TIMEOUT = 10000  # ms
@@ -259,10 +260,11 @@ class HybridContactExtractor:
         'facebook': re.compile(r'https?://(?:www\.)?facebook\.com/[a-zA-Z0-9.]+/?', re.IGNORECASE),
     }
     
-    def __init__(self, max_workers: int = MAX_WORKERS, on_progress: Callable = None):
+    def __init__(self, max_workers: int = MAX_WORKERS, on_progress: Callable = None, fast_mode: bool = False):
         self.max_workers = max_workers
         self.semaphore = None
         self.on_progress = on_progress
+        self.fast_mode = fast_mode  # True → solo Katana, 15s timeout por dominio
         self.completed = 0
         self.total = 0
         self.katana_hits = 0
@@ -340,6 +342,11 @@ class HybridContactExtractor:
     ) -> Dict[str, Any]:
         """
         Extracción híbrida: Katana primero, Playwright si falla.
+
+        Modos:
+        - fast_mode=True  → solo Katana, timeout total de 15s por dominio.
+                            Si en 15s no hay email, pasa al siguiente dominio.
+        - fast_mode=False → Katana (7s) → Playwright como fallback profundo.
         """
         url = domain_info.get('url', '')
         domain = domain_info.get('domain', '')
@@ -348,35 +355,53 @@ class HybridContactExtractor:
         search_email = 'email' in fields
         search_phone = 'phone' in fields
         search_social = 'social' in fields
-        
-        # === PASO 1: KATANA (Ultra rápido) ===
-        katana_success = await self._try_katana(result, url, search_email, search_phone, search_social)
-        
-        if katana_success and result.email:
-            # ¡Katana encontró email! Saltar Playwright
-            result.extraction_method = "katana"
-            result.katana_found = True
-            result.success = True
-            self.katana_hits += 1
-            print(f"[Katana] ⚡ {domain} -> {result.email} (SKIP Playwright)")
-        else:
-            # === PASO 2: PLAYWRIGHT (Fallback profundo) ===
-            result.playwright_used = True
-            self.playwright_fallbacks += 1
-            
-            await self._try_playwright(result, url, search_email, search_phone, search_social)
-            
+
+        if self.fast_mode:
+            # === MODO RÁPIDO: solo Katana con timeout máximo de 15s ===
+            try:
+                katana_success = await asyncio.wait_for(
+                    self._try_katana(result, url, search_email, search_phone, search_social),
+                    timeout=KATANA_FAST_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                katana_success = False
+                print(f"[Fast] ⏱ {domain} → timeout ({KATANA_FAST_TIMEOUT}s), sin resultados")
+
             if result.email or result.phone:
-                result.extraction_method = "playwright" if not result.katana_found else "both"
+                result.extraction_method = "katana"
+                result.katana_found = True
                 result.success = True
-                print(f"[Playwright] 🔍 {domain} -> email={result.email}, phone={result.phone}")
+                self.katana_hits += 1
+                print(f"[Fast] ⚡ {domain} -> {result.email}")
             else:
                 result.extraction_method = "none"
-                print(f"[Hybrid] ❌ {domain} -> Sin resultados")
+                print(f"[Fast] ❌ {domain} -> Sin resultados")
+        else:
+            # === MODO PRECISO: Katana (7s) → Playwright fallback ===
+            katana_success = await self._try_katana(result, url, search_email, search_phone, search_social)
+
+            if katana_success and result.email:
+                result.extraction_method = "katana"
+                result.katana_found = True
+                result.success = True
+                self.katana_hits += 1
+                print(f"[Katana] ⚡ {domain} -> {result.email} (SKIP Playwright)")
+            else:
+                # === PLAYWRIGHT (Fallback profundo) ===
+                result.playwright_used = True
+                self.playwright_fallbacks += 1
+
+                await self._try_playwright(result, url, search_email, search_phone, search_social)
+
+                if result.email or result.phone:
+                    result.extraction_method = "playwright" if not result.katana_found else "both"
+                    result.success = True
+                    print(f"[Playwright] 🔍 {domain} -> email={result.email}, phone={result.phone}")
+                else:
+                    result.extraction_method = "none"
+                    print(f"[Hybrid] ❌ {domain} -> Sin resultados")
         
-        # Añadir resultado a domain_info
         domain_info['contact'] = result.to_dict()
-        
         return domain_info
     
     async def _try_katana(
@@ -775,16 +800,21 @@ class HybridContactExtractor:
 def extract_contacts_hybrid(
     domains: List[Dict[str, Any]], 
     fields: List[str] = None,
-    on_progress: Callable = None
+    on_progress: Callable = None,
+    fast_mode: bool = False
 ) -> List[Dict[str, Any]]:
     """
     Función de conveniencia para extracción híbrida.
+
+    Args:
+        fast_mode: True → solo Katana (15s máx por dominio).
+                   False → Katana + Playwright fallback (modo preciso).
     """
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
     try:
-        extractor = HybridContactExtractor(on_progress=on_progress)
+        extractor = HybridContactExtractor(on_progress=on_progress, fast_mode=fast_mode)
         return loop.run_until_complete(
             extractor.extract_all_parallel(domains, fields)
         )

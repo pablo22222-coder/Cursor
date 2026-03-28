@@ -183,6 +183,9 @@ def create_app():
         prompt = data.get('prompt', '').strip()
         max_results = data.get('max_results', 20)
         extract_fields = data.get('extract_fields', ['email'])  # Por defecto solo email
+        # "fast" → solo Katana 15s | "precise" → Katana + Playwright (por defecto)
+        extraction_mode = data.get('extraction_mode', 'precise')
+        fast_mode = extraction_mode == 'fast'
         
         if not prompt:
             return jsonify({"error": "El prompt es requerido"}), 400
@@ -389,12 +392,16 @@ def create_app():
                 
                 search_state["progress"] = 90
                 
-                # === FASE 3: EXTRACCIÓN HÍBRIDA (Katana + Playwright) - 3 WORKERS ===
+                # === FASE 3: EXTRACCIÓN DE CONTACTOS - 3 WORKERS ===
                 if extract_contacts and final_results and extract_fields:
                     fields_msg = ", ".join(extract_fields).replace("social", "RRSS")
-                    search_state["status"] = f"Fase 3: ⚡ Katana + 🔍 Playwright ({fields_msg})..."
-                    print(f"[Fase 3] Iniciando extracción HÍBRIDA para {len(final_results)} dominios")
-                    print(f"[Fase 3] Estrategia: Katana primero (7s) → Playwright si falla")
+                    if fast_mode:
+                        mode_label = "⚡ Modo Rápido (Katana, 15s/dominio)"
+                    else:
+                        mode_label = "⚡ Katana + 🔍 Playwright"
+                    search_state["status"] = f"Fase 3: {mode_label} ({fields_msg})..."
+                    print(f"[Fase 3] Iniciando extracción para {len(final_results)} dominios")
+                    print(f"[Fase 3] Modo: {'Rápido (solo Katana, 15s)' if fast_mode else 'Preciso (Katana → Playwright)'}")
                     
                     def on_hybrid_progress(progress, status, completed, total):
                         """Callback para progreso híbrido."""
@@ -403,11 +410,11 @@ def create_app():
                         search_state["status"] = f"Fase 3: {status} ({completed}/{total})"
                     
                     try:
-                        # Extracción HÍBRIDA: Katana (rápido) + Playwright (fallback)
                         final_results = extract_contacts_hybrid(
                             final_results,
                             fields=extract_fields,
-                            on_progress=on_hybrid_progress
+                            on_progress=on_hybrid_progress,
+                            fast_mode=fast_mode
                         )
                         
                         # Añadir fields_requested y contar estadísticas
