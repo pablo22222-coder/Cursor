@@ -5,7 +5,14 @@ Optimizado para máxima velocidad en extracción de contactos.
 Estrategia:
 1. Katana primero (ultra rápido, sin JS) - 7s timeout
 2. Si encuentra email válido → SALTAR Playwright (ahorro ~70% tiempo)
-3. Si Katana falla → Playwright como último recurso
+3. Si Katana falla → Playwright como último recurso con 3 pestañas por worker
+
+Optimizaciones Playwright (Fase 3):
+- Bloqueo de recursos no esenciales: image, stylesheet, font, media, other
+- Filtrado de scripts de terceros (trackers, ads, analytics)
+- 3 pestañas simultáneas por worker (Home + Contacto + Legal)
+- Cierre inmediato de las otras pestañas en cuanto una encuentra el email
+- Total: 3 workers × 3 pestañas = 9 páginas procesadas en paralelo
 
 Prioridad de búsqueda:
 1. Footer (90% de emails están aquí)
@@ -23,7 +30,7 @@ from concurrent.futures import ThreadPoolExecutor
 from bs4 import BeautifulSoup
 
 try:
-    from playwright.async_api import async_playwright, Page
+    from playwright.async_api import async_playwright, Page, BrowserContext
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
@@ -32,6 +39,8 @@ except ImportError:
 MAX_WORKERS = 3
 KATANA_TIMEOUT = 7  # seconds - ultra fast
 PLAYWRIGHT_TIMEOUT = 15000  # ms
+# Timeout por pestaña individual dentro del worker (más ajustado)
+TAB_TIMEOUT = 10000  # ms
 
 CHROME_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 
@@ -40,8 +49,54 @@ BROWSER_ARGS = [
     '--disable-gpu', '--disable-blink-features=AutomationControlled'
 ]
 
-# Páginas de alto valor para buscar contactos
+# Páginas de alto valor para buscar contactos (se usan las 3 primeras como pestañas)
 HIGH_VALUE_PATHS = ['/contacto', '/contact', '/about', '/legal', '/aviso-legal', '/kontakt', '/quienes-somos']
+
+# Tipos de recurso bloqueados — no aportan emails y consumen RAM/tiempo
+BLOCKED_RESOURCE_TYPES = {"image", "stylesheet", "font", "media", "other"}
+
+# Dominios de terceros bloqueados (trackers, ads, analytics)
+# Solo se bloquean scripts de terceros; los del dominio principal se permiten
+BLOCKED_THIRD_PARTY_DOMAINS = {
+    # Analytics
+    "google-analytics.com", "analytics.google.com", "googletagmanager.com",
+    "googletagservices.com", "googlesyndication.com", "stats.g.doubleclick.net",
+    "ssl.google-analytics.com",
+    # Advertising / doubleclick
+    "doubleclick.net", "adservice.google.com", "googleadservices.com",
+    "pagead2.googlesyndication.com", "securepubads.g.doubleclick.net",
+    # Facebook / Meta pixel
+    "connect.facebook.net", "facebook.com", "facebook.net",
+    "pixel.facebook.com",
+    # Twitter / X tracking
+    "platform.twitter.com", "static.ads-twitter.com", "analytics.twitter.com",
+    "t.co",
+    # LinkedIn insight
+    "snap.licdn.com", "px.ads.linkedin.com",
+    # Microsoft / Clarity / Bing
+    "clarity.ms", "bat.bing.com", "c.bing.com",
+    # Hotjar
+    "static.hotjar.com", "vars.hotjar.com", "script.hotjar.com",
+    # Mixpanel / Segment / Amplitude
+    "cdn.mxpnl.com", "api.mixpanel.com",
+    "cdn.segment.com", "api.segment.io",
+    "cdn.amplitude.com",
+    # Intercom / Drift / Crisp / Tidio (chat widgets)
+    "widget.intercom.io", "js.intercom.io",
+    "js.driftt.com",
+    "client.crisp.chat",
+    "code.tidio.co",
+    # Zendesk
+    "static.zdassets.com",
+    # HubSpot tracking (solo tracker, no el widget de formularios)
+    "js.hs-analytics.net", "js.hs-banner.com",
+    # Sentry (error tracking — no aporta emails)
+    "browser.sentry-cdn.com", "js.sentry-cdn.com",
+    # General CDNs de ads
+    "ads.pubmatic.com", "sync.pubmatic.com",
+    "contextual.media.net",
+    "prebid.org",
+}
 
 # Emails placeholder a ignorar
 PLACEHOLDER_EMAILS = {
@@ -498,6 +553,132 @@ class HybridContactExtractor:
         
         return is_valid
     
+    async def _route_handler(self, route, base_domain: str):
+        """
+        Intercepta todas las peticiones de red del contexto Playwright.
+
+        Reglas:
+        1. Abortar recursos no esenciales (image, stylesheet, font, media, other)
+        2. Abortar scripts de terceros que pertenecen a trackers/ads conocidos
+        3. Permitir el resto (scripts del dominio principal, XHR, fetch, doc, etc.)
+        """
+        resource_type = route.request.resource_type
+
+        # Regla 1: bloquear tipos no esenciales
+        if resource_type in BLOCKED_RESOURCE_TYPES:
+            await route.abort()
+            return
+
+        # Regla 2: bloquear scripts de terceros conocidos (trackers/ads)
+        if resource_type == "script":
+            request_url = route.request.url.lower()
+            for blocked in BLOCKED_THIRD_PARTY_DOMAINS:
+                if blocked in request_url:
+                    await route.abort()
+                    return
+
+        await route.continue_()
+
+    async def _fetch_page_tab(
+        self,
+        context: "BrowserContext",
+        tab_url: str,
+        tab_label: str,
+        result: HybridResult,
+        found_event: asyncio.Event,
+        search_email: bool,
+        search_phone: bool,
+        search_social: bool,
+    ) -> str:
+        """
+        Abre una sola pestaña, extrae datos y señaliza found_event en cuanto
+        encuentra un email. Comprueba el evento en cada punto de espera para
+        abortar cuanto antes y liberar RAM al siguiente dominio.
+        
+        Returns: etiqueta de la fuente si encontró algo, cadena vacía si no.
+        """
+        # Salida rápida si otra pestaña del mismo worker ya encontró el email
+        if found_event.is_set():
+            return ""
+
+        page = None
+        try:
+            page = await context.new_page()
+            page.set_default_timeout(TAB_TIMEOUT)
+
+            # Lanzar navegación y esperar o abort según found_event
+            nav_task = asyncio.create_task(
+                page.goto(tab_url, wait_until="domcontentloaded", timeout=TAB_TIMEOUT)
+            )
+            wait_event_task = asyncio.create_task(found_event.wait())
+
+            done, pending = await asyncio.wait(
+                [nav_task, wait_event_task],
+                return_when=asyncio.FIRST_COMPLETED
+            )
+
+            # Cancelar la tarea pendiente que no completó primero
+            for t in pending:
+                t.cancel()
+                try:
+                    await t
+                except Exception:
+                    pass
+
+            # Si found_event disparó antes que la navegación, abortar esta pestaña
+            if found_event.is_set() and nav_task not in done:
+                return ""
+
+            # Comprobar si la navegación lanzó excepción
+            if nav_task in done:
+                exc = nav_task.exception()
+                if exc is not None:
+                    return ""
+
+            if found_event.is_set():
+                return ""
+
+            # Scroll para activar lazy-load de footer (con early-exit)
+            try:
+                scroll_task = asyncio.create_task(
+                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                )
+                await asyncio.wait([scroll_task, asyncio.create_task(asyncio.sleep(0.5))],
+                                   return_when=asyncio.ALL_COMPLETED)
+            except Exception:
+                pass
+
+            if found_event.is_set():
+                return ""
+
+            html = await page.content()
+
+            # Footer primero
+            found_source = ""
+            footer_html = self._extract_footer(html)
+            if footer_html:
+                if self._extract_from_html(footer_html, result, search_email, search_phone, search_social):
+                    found_source = f"pw-{tab_label}-footer"
+
+            if not result.email:
+                if self._extract_from_html(html, result, search_email, search_phone, search_social):
+                    found_source = found_source or f"pw-{tab_label}"
+
+            # Señalizar al resto de pestañas del mismo worker
+            if result.email and not found_event.is_set():
+                found_event.set()
+
+            return found_source
+
+        except Exception:
+            return ""
+        finally:
+            if page:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+
     async def _try_playwright(
         self, 
         result: HybridResult, 
@@ -509,6 +690,13 @@ class HybridContactExtractor:
         """
         Fallback con Playwright para sitios con JS.
         Solo se ejecuta si Katana no encuentra email.
+
+        Optimizaciones activas:
+        - Bloqueo de image, stylesheet, font, media, other via route interception
+        - Filtrado de scripts de terceros (trackers, ads, analytics)
+        - 3 pestañas simultáneas por worker: Home + /contacto + página legal
+        - En cuanto una pestaña encuentra el email, las demás se cancelan
+          → libera recursos inmediatamente para el siguiente dominio
         """
         if not PLAYWRIGHT_AVAILABLE:
             return
@@ -524,81 +712,63 @@ class HybridContactExtractor:
             )
             
             context = await browser.new_context(
-                viewport={'width': 1920, 'height': 1080},
+                viewport={'width': 1280, 'height': 800},
                 user_agent=CHROME_USER_AGENT,
                 locale='es-ES'
             )
-            
-            page = await context.new_page()
-            page.set_default_timeout(PLAYWRIGHT_TIMEOUT)
-            
-            # Block heavy resources
-            await page.route("**/*", lambda route: (
-                route.abort() if route.request.resource_type in ["image", "font", "media", "stylesheet"]
-                else route.continue_()
-            ))
-            
-            sources = []
-            
-            # Home
-            try:
-                await page.goto(url, wait_until='domcontentloaded', timeout=PLAYWRIGHT_TIMEOUT)
-                
-                # Scroll rápido para cargar lazy content
-                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await asyncio.sleep(1)
-                
-                html = await page.content()
-                
-                # Footer primero
-                footer_html = self._extract_footer(html)
-                if footer_html:
-                    if self._extract_from_html(footer_html, result, search_email, search_phone, search_social):
-                        sources.append("pw-footer")
-                
-                if not result.email:
-                    if self._extract_from_html(html, result, search_email, search_phone, search_social):
-                        sources.append("pw-home")
-                        
-            except:
-                pass
-            
-            # Contact pages si no hay email
-            if not result.email:
-                for path in HIGH_VALUE_PATHS[:2]:
-                    try:
-                        contact_url = urljoin(url, path)
-                        response = await page.goto(contact_url, wait_until='domcontentloaded', timeout=10000)
-                        
-                        if response and response.ok:
-                            await asyncio.sleep(0.5)
-                            html = await page.content()
-                            
-                            if self._extract_from_html(html, result, search_email, search_phone, search_social):
-                                sources.append(f"pw-{path.strip('/')}")
-                            
-                            if result.email:
-                                break
-                    except:
-                        continue
-            
+
+            # Instalar interceptor de rutas en el contexto completo
+            # (aplica a TODAS las pestañas abiertas desde este contexto)
+            base_domain = urlparse(url).netloc.lower()
+            await context.route(
+                "**/*",
+                lambda route: asyncio.ensure_future(self._route_handler(route, base_domain))
+            )
+
+            # Evento compartido: en cuanto una pestaña encuentra email → cancela las demás
+            found_event = asyncio.Event()
+
+            # Seleccionar las 3 URLs de alta prioridad para las pestañas
+            tab_pages = [
+                (url, "home"),
+                (urljoin(url, HIGH_VALUE_PATHS[0]), HIGH_VALUE_PATHS[0].strip("/")),  # /contacto
+                (urljoin(url, HIGH_VALUE_PATHS[3]), HIGH_VALUE_PATHS[3].strip("/")),  # /legal
+            ]
+
+            # Lanzar las 3 pestañas simultáneamente
+            tab_tasks = [
+                asyncio.create_task(
+                    self._fetch_page_tab(
+                        context, tab_url, tab_label,
+                        result, found_event,
+                        search_email, search_phone, search_social
+                    )
+                )
+                for tab_url, tab_label in tab_pages
+            ]
+
+            # Esperar a que todas terminen (las que no encuentran nada terminan solas;
+            # las que sí encuentran señalizan found_event y las demás abortan antes)
+            tab_sources = await asyncio.gather(*tab_tasks, return_exceptions=True)
+
+            sources = [s for s in tab_sources if isinstance(s, str) and s]
             if sources:
                 result.source = (result.source + " + " if result.source else "") + " + ".join(sources)
-            
+
             await context.close()
             
-        except Exception as e:
+        except Exception:
             pass
         finally:
             if browser:
                 try:
                     await browser.close()
-                except:
+                except Exception:
                     pass
             if playwright:
                 try:
                     await playwright.stop()
-                except:
+                except Exception:
                     pass
 
 

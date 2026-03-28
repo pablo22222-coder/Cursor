@@ -24,6 +24,31 @@ BROWSER_ARGS = [
     '--disable-gpu', '--disable-blink-features=AutomationControlled'
 ]
 
+# Tipos de recurso bloqueados (no aportan emails y consumen RAM/tiempo)
+BLOCKED_RESOURCE_TYPES = {"image", "stylesheet", "font", "media", "other"}
+
+# Dominios de terceros bloqueados (trackers, ads, analytics)
+BLOCKED_THIRD_PARTY_DOMAINS = {
+    "google-analytics.com", "analytics.google.com", "googletagmanager.com",
+    "googletagservices.com", "googlesyndication.com", "stats.g.doubleclick.net",
+    "doubleclick.net", "adservice.google.com", "googleadservices.com",
+    "connect.facebook.net", "facebook.net", "pixel.facebook.com",
+    "platform.twitter.com", "static.ads-twitter.com", "analytics.twitter.com",
+    "snap.licdn.com", "px.ads.linkedin.com",
+    "clarity.ms", "bat.bing.com",
+    "static.hotjar.com", "vars.hotjar.com", "script.hotjar.com",
+    "cdn.mxpnl.com", "api.mixpanel.com",
+    "cdn.segment.com", "api.segment.io",
+    "cdn.amplitude.com",
+    "widget.intercom.io", "js.intercom.io",
+    "js.driftt.com",
+    "client.crisp.chat",
+    "code.tidio.co",
+    "static.zdassets.com",
+    "js.hs-analytics.net", "js.hs-banner.com",
+    "browser.sentry-cdn.com", "js.sentry-cdn.com",
+}
+
 
 @dataclass
 class ContactResult:
@@ -199,12 +224,22 @@ class ParallelContactExtractor:
             
             page = await context.new_page()
             page.set_default_timeout(15000)
-            
-            # Block heavy resources
-            await page.route("**/*", lambda route: (
-                route.abort() if route.request.resource_type in ["image", "font", "media"]
-                else route.continue_()
-            ))
+
+            # Block non-essential resources and third-party trackers/ads
+            async def _route_handler(route):
+                resource_type = route.request.resource_type
+                if resource_type in BLOCKED_RESOURCE_TYPES:
+                    await route.abort()
+                    return
+                if resource_type == "script":
+                    req_url = route.request.url.lower()
+                    for blocked in BLOCKED_THIRD_PARTY_DOMAINS:
+                        if blocked in req_url:
+                            await route.abort()
+                            return
+                await route.continue_()
+
+            await page.route("**/*", lambda route: asyncio.ensure_future(_route_handler(route)))
             
             # Anti-detection
             await page.add_init_script("""
