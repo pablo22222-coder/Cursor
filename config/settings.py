@@ -48,10 +48,15 @@ class Settings:
     Se cargan exclusivamente desde variables de entorno (.env o sistema).
     """
     
-    # API Keys - Se cargan desde variables de entorno
+    # API Keys — Se cargan desde variables de entorno (NUNCA hardcodeadas)
     serper_api_key: str = field(default="")
     gemini_api_key: str = field(default="")
     pagespeed_api_key: str = field(default="")
+    # AI Fallback Chain
+    groq_api_key: str = field(default="")
+    cerebras_api_key: str = field(default="")
+    sambanova_api_key: str = field(default="")
+
     
     # Serper Config
     serper_base_url: str = "https://google.serper.dev/search"
@@ -76,10 +81,13 @@ class Settings:
     
     def __post_init__(self):
         """Cargar API keys desde variables de entorno."""
-        # Cargar API keys desde variables de entorno (OBLIGATORIO)
-        self.serper_api_key = os.getenv("SERPER_API_KEY", "")
-        self.gemini_api_key = os.getenv("GEMINI_API_KEY", "")
+        self.serper_api_key    = os.getenv("SERPER_API_KEY", "")
+        self.gemini_api_key    = os.getenv("GEMINI_API_KEY", "")
         self.pagespeed_api_key = os.getenv("PAGESPEED_API_KEY", "")
+        # AI Fallback Chain
+        self.groq_api_key      = os.getenv("GROQ_API_KEY", "")
+        self.cerebras_api_key  = os.getenv("CEREBRAS_API_KEY", "")
+        self.sambanova_api_key = os.getenv("SAMBANOVA_API_KEY", "")
         
         # Validar que las keys críticas existen
         if not self.serper_api_key:

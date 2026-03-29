@@ -288,51 +288,57 @@ Responde SOLO con el JSON, nada más.'''
 
     def __init__(self):
         self.settings = get_settings()
-        self.gemini_available = False
+        # AIManager gestiona el fallback entre todos los proveedores.
+        # El modelo de Gemini directo se mantiene como referencia pero
+        # ya no se usa directamente en parse().
+        self.gemini_available = True   # siempre True: AIManager tiene múltiples fallbacks
         self.model = None
         self.last_error = None
-        
-        # Intentar configurar Gemini solo si hay API key
+
+        # Mantener compatibilidad: intentar configurar Gemini SDK si hay key
         if self.settings.is_gemini_configured():
             try:
-                genai.configure(api_key=self.settings.gemini_api_key)
-                self.model = genai.GenerativeModel(self.settings.gemini_model)
-                self.gemini_available = True
+                import google.generativeai as _genai
+                _genai.configure(api_key=self.settings.gemini_api_key)
+                self.model = _genai.GenerativeModel(self.settings.gemini_model)
             except Exception as e:
                 self.last_error = str(e)
-                self.gemini_available = False
-    
+
+        # Importar AIManager aquí para evitar importación circular
+        from src.services.ai_manager import get_ai_manager
+        self._ai_manager = get_ai_manager()
+
     def parse(self, prompt: str) -> ParsedPrompt:
         """
         Parsea un prompt y devuelve un JSON estructurado.
-        
-        Args:
-            prompt: El prompt del usuario
-            
-        Returns:
-            ParsedPrompt con toda la información extraída
+        Usa AIManager para fallback automático entre 5 proveedores.
+
+        Orden: Groq → Cerebras → SambaNova → Gemini → WebLLM → local_parse
         """
-        # Si Gemini no está disponible, usar análisis local directamente
-        if not self.gemini_available or not self.model:
-            return self._local_parse_with_warning(prompt, "GEMINI_API_KEY no configurada")
-        
+        user_prompt = f"PROMPT A ANALIZAR:\n{prompt}"
+
+        ai_response = self._ai_manager.complete(
+            prompt=user_prompt,
+            system_prompt=self.SYSTEM_PROMPT,
+        )
+
+        if not ai_response.success or not ai_response.text.strip():
+            return self._local_parse_with_warning(
+                prompt,
+                f"⚠️ Todos los proveedores AI fallaron. Usando análisis local. "
+                f"({ai_response.error})"
+            )
+
         try:
-            # Construir el prompt para Gemini
-            full_prompt = f"{self.SYSTEM_PROMPT}\n\nPROMPT A ANALIZAR:\n{prompt}"
-            
-            response = self.model.generate_content(full_prompt)
-            json_data = self._parse_response(response.text, prompt)
-            
-            # Marcar que fue procesado con Gemini
+            json_data = self._parse_response(ai_response.text, prompt)
             if "notes" not in json_data:
                 json_data["notes"] = []
-            json_data["notes"].append("Análisis realizado con Gemini AI")
-            
+            json_data["notes"].append(
+                f"Análisis via {ai_response.provider} ({ai_response.model})"
+            )
             return ParsedPrompt.from_dict(json_data)
-            
         except Exception as e:
-            error_msg = str(e)
-            return self._handle_gemini_error(prompt, error_msg)
+            return self._handle_gemini_error(prompt, str(e))
     
     def _handle_gemini_error(self, prompt: str, error_msg: str) -> ParsedPrompt:
         """Maneja errores de Gemini y decide qué hacer."""

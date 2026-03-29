@@ -78,44 +78,47 @@ class GeminiInterpreter:
     
     def __init__(self):
         self.settings = get_settings()
-        self.gemini_available = False
+        self.gemini_available = True   # siempre True: AIManager tiene múltiples fallbacks
         self.model = None
-        
-        # Intentar configurar Gemini solo si hay API key
+
+        # Mantener compatibilidad: inicializar SDK de Gemini si hay key
         if self.settings.is_gemini_configured():
             try:
                 genai.configure(api_key=self.settings.gemini_api_key)
                 self.model = genai.GenerativeModel(self.settings.gemini_model)
-                self.gemini_available = True
             except Exception as e:
-                print(f"⚠️ No se pudo inicializar Gemini: {e}")
-                self.gemini_available = False
-    
+                print(f"⚠️ No se pudo inicializar Gemini SDK: {e}")
+
+        from src.services.ai_manager import get_ai_manager
+        self._ai_manager = get_ai_manager()
+
     def analyze_prompt(self, prompt: str) -> PromptAnalysis:
         """
-        Analiza el prompt del usuario y extrae toda la información relevante.
-        
-        Args:
-            prompt: El prompt del usuario describiendo qué webs busca
-            
-        Returns:
-            PromptAnalysis con toda la información extraída
+        Analiza el prompt del usuario y extrae información estructurada.
+        Usa AIManager para fallback automático entre 5 proveedores.
+
+        Orden: Groq → Cerebras → SambaNova → Gemini → WebLLM → basic_analysis
         """
-        # Si Gemini no está disponible, usar análisis local directamente
-        if not self.gemini_available or not self.model:
-            print("ℹ️ Usando análisis local (Gemini no disponible)")
+        system_prompt_text = self._build_analysis_prompt(prompt)
+
+        ai_response = self._ai_manager.complete(
+            prompt=prompt,
+            system_prompt=system_prompt_text,
+        )
+
+        if not ai_response.success or not ai_response.text.strip():
+            print(
+                f"[GeminiInterpreter] ⚠️ Todos los providers fallaron. "
+                f"Usando análisis local. ({ai_response.error})"
+            )
             return self._basic_analysis(prompt)
-        
-        system_prompt = self._build_analysis_prompt(prompt)
-        
+
         try:
-            response = self.model.generate_content(system_prompt)
-            analysis_data = self._parse_response(response.text)
+            analysis_data = self._parse_response(ai_response.text)
             analysis_data["original_prompt"] = prompt
             return PromptAnalysis(**analysis_data)
         except Exception as e:
-            error_msg = str(e)
-            self._handle_gemini_error(error_msg)
+            print(f"[GeminiInterpreter] Error parseando respuesta: {e}. Usando análisis local.")
             return self._basic_analysis(prompt)
     
     def _handle_gemini_error(self, error_msg: str):
