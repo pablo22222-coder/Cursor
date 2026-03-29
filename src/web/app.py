@@ -22,18 +22,11 @@ import time
 # Añadir el directorio raíz al path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from src.prompt_interpreter.gemini_interpreter import GeminiInterpreter
 from src.prompt_interpreter.intent_detector import IntentDetector
-from src.prompt_interpreter.query_generator import QueryGenerator
-from src.prompt_interpreter.semantic_parser import SemanticParser, get_technology_requirements
-from src.web_search.serper_search import SerperSearch
+from src.services.ai_interpreter import AIInterpreter, SearchIntent
+from src.web_search.serper_search import SerperSearch, SearchResult
 from src.domain_validator.validator import DomainValidator
-from src.web_analyzer.wappalyzer_analyzer import WappalyzerAnalyzer
-from src.web_analyzer.contact_extractor import ContactExtractor
-from src.web_analyzer.domain_analyzer import DomainAnalyzer
 from src.web_analyzer.parallel_analyzer import analyze_domains_parallel, MAX_DOMAINS as PARALLEL_MAX_DOMAINS
-from src.web_analyzer.parallel_extractor import extract_contacts_parallel
-from src.web_analyzer.parallel_wappalyzer import analyze_technologies_parallel, ParallelWappalyzerAnalyzer
 from src.web_analyzer.hybrid_extractor import extract_contacts_hybrid
 from src.web_analyzer.domain_pipeline import DomainPipelineOrchestrator, NUM_WORKERS
 from src.utils.resource_throttle import reset_throttle, get_throttle
@@ -212,45 +205,39 @@ def create_app():
             ]
 
             try:
-                # ── PASO 0: Parsear prompt y obtener queries ──────────────
+                # ── PASO 0: Interpretar prompt con AIManager ──────────────
                 search_state["progress"] = 5
+                search_state["status"] = "Analizando prompt con IA..."
 
-                semantic_parser = SemanticParser()
-                parsed_prompt = semantic_parser.parse(prompt)
-                tech_requirements = get_technology_requirements(parsed_prompt)
+                intent: SearchIntent = AIInterpreter().interpret(prompt)
 
-                search_state["progress"] = 10
-
-                interpreter = GeminiInterpreter()
-                analysis = interpreter.analyze_prompt(prompt)
-
-                if tech_requirements.get("must_have") or tech_requirements.get("must_have_categories"):
-                    analysis.required_tools = (
-                        tech_requirements.get("must_have", []) +
-                        tech_requirements.get("must_have_categories", [])
-                    )
-                if tech_requirements.get("must_not") or tech_requirements.get("must_not_categories"):
-                    analysis.excluded_tools = (
-                        tech_requirements.get("must_not", []) +
-                        tech_requirements.get("must_not_categories", [])
-                    )
-
-                search_state["analysis"] = {
-                    "business_type":   analysis.business_type,
-                    "product_category":analysis.product_category,
-                    "service_type":    analysis.service_type,
-                    "niche":           analysis.niche,
-                    "queries_count":   len(analysis.search_queries),
-                    "queries":         analysis.search_queries[:5],
-                    "tech_must_have":  analysis.required_tools if hasattr(analysis, 'required_tools') else [],
-                    "tech_must_not":   analysis.excluded_tools if hasattr(analysis, 'excluded_tools') else [],
-                }
                 search_state["progress"] = 20
+                search_state["analysis"] = {
+                    "business_type":   intent.business_type,
+                    "product_category":intent.product_category,
+                    "service_type":    intent.service_type,
+                    "niche":           intent.niche,
+                    "queries_count":   len(intent.search_queries),
+                    "queries":         intent.search_queries[:5],
+                    "tech_must_have":  intent.must_have,
+                    "tech_must_not":   intent.must_not,
+                    "provider_used":   intent.provider_used,
+                    "confidence":      intent.confidence,
+                    "notes":           intent.analysis_notes,
+                }
+
+                # Build tech_requirements dict compatible with pipeline
+                tech_requirements = {
+                    "must_have":            intent.must_have,
+                    "must_not":             intent.must_not,
+                    "must_have_categories": [],
+                    "must_not_categories":  [],
+                }
 
                 # ── PASO 1: Obtener candidatos con Serper ─────────────────
-                search_state["status"] = "Buscando webs candidatas..."
+                search_state["status"] = f"Buscando con {len(intent.search_queries)} queries generadas por IA..."
                 searcher = SerperSearch()
-                search_results = searcher.search(analysis, max_results=max_results * 3)
+                search_results = searcher.search(intent, max_results=max_results * 3)
                 search_state["progress"] = 35
                 search_state["status"] = f"Candidatos obtenidos: {len(search_results)} — Lanzando 3 workers..."
 
@@ -291,7 +278,7 @@ def create_app():
                 throttle = reset_throttle()
 
                 orchestrator = DomainPipelineOrchestrator(
-                    analysis=analysis,
+                    analysis=intent,
                     tech_requirements=tech_requirements,
                     extract_fields=extract_fields if extract_contacts else [],
                     fast_mode=fast_mode,

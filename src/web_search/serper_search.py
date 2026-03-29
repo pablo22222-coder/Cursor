@@ -9,7 +9,8 @@ from urllib.parse import urlparse
 import time
 
 from config.settings import get_settings
-from src.prompt_interpreter.gemini_interpreter import PromptAnalysis
+# SerperSearch accepts any object with .search_queries and .business_type attrs.
+# This covers both the legacy PromptAnalysis and the new SearchIntent.
 
 
 @dataclass
@@ -60,7 +61,7 @@ class SerperSearch:
             "coursera.org", "udemy.com",  # Educación
         }
     
-    def search(self, analysis: PromptAnalysis, max_results: int = 50) -> List[SearchResult]:
+    def search(self, analysis: Any, max_results: int = 50) -> List[SearchResult]:
         """
         Ejecuta búsquedas basadas en el análisis del prompt.
         
@@ -97,7 +98,7 @@ class SerperSearch:
         
         return all_results
     
-    def search_with_operators(self, analysis: PromptAnalysis, max_results: int = 50) -> List[SearchResult]:
+    def search_with_operators(self, analysis: Any, max_results: int = 50) -> List[SearchResult]:
         """
         Búsqueda avanzada usando operadores de Google para mejores resultados.
         """
@@ -124,7 +125,7 @@ class SerperSearch:
         
         return all_results
     
-    def _generate_operator_queries(self, analysis: PromptAnalysis) -> List[str]:
+    def _generate_operator_queries(self, analysis: Any) -> List[str]:
         """Genera queries con operadores de búsqueda avanzados."""
         queries = []
         base_terms = []
@@ -241,7 +242,7 @@ class SerperSearch:
         except:
             return url
     
-    def search_by_location(self, analysis: PromptAnalysis, locations: List[str], 
+    def search_by_location(self, analysis: Any, locations: List[str], 
                           max_results_per_location: int = 10) -> List[SearchResult]:
         """
         Búsqueda segmentada por ubicación geográfica.
@@ -267,7 +268,7 @@ class SerperSearch:
         
         return all_results
     
-    def expand_search(self, analysis: PromptAnalysis, existing_domains: Set[str], 
+    def expand_search(self, analysis: Any, existing_domains: Set[str], 
                      additional_queries: List[str]) -> List[SearchResult]:
         """
         Expande la búsqueda con queries adicionales, excluyendo dominios ya encontrados.

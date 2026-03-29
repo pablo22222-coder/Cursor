@@ -12,7 +12,9 @@ from typing import Dict, Any, List, Optional, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
-from src.prompt_interpreter.gemini_interpreter import PromptAnalysis
+# validator accepts any analysis object with business_type, required_tools,
+# excluded_tools, validation_indicators attrs (PromptAnalysis or SearchIntent)
+from typing import Any as PromptAnalysis  # type alias for backwards compat
 from src.web_analyzer.wappalyzer_analyzer import WappalyzerAnalyzer, WappalyzerProfile
 from src.web_analyzer.pagespeed_analyzer import PageSpeedAnalyzer, PerformanceMetrics
 from src.web_search.serper_search import SearchResult
