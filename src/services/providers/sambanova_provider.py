@@ -8,6 +8,8 @@ import requests
 
 from src.services.providers.base_provider import BaseProvider, AIResponse, ProviderError
 
+_ENV_KEY = "SAMBANOVA_API_KEY"
+
 
 class SambanovaProvider(BaseProvider):
     name     = "SambaNova"
@@ -17,14 +19,20 @@ class SambanovaProvider(BaseProvider):
     _API_URL = "https://api.sambanova.ai/v1/chat/completions"
 
     def __init__(self):
-        self._api_key = os.getenv("SAMBANOVA_API_KEY", "")
+        key = os.getenv(_ENV_KEY, "")
+        status = "✓ OK" if len(key) > 10 else "✗ MISSING"
+        print(f"[AIManager] Cargando proveedor SambaNova...       {status}")
+
+    @property
+    def _api_key(self) -> str:
+        return os.getenv(_ENV_KEY, "")
 
     def is_available(self) -> bool:
-        return bool(self._api_key and len(self._api_key) > 10)
+        return len(self._api_key) > 10
 
     def complete(self, prompt: str, system_prompt: str = "") -> AIResponse:
         if not self.is_available():
-            raise ValueError("SAMBANOVA_API_KEY no configurada")
+            raise ValueError(f"{_ENV_KEY} no configurada")
 
         messages = []
         if system_prompt:

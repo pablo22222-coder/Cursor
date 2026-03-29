@@ -15,9 +15,20 @@ import os
 import json
 import webbrowser
 import threading
+from pathlib import Path
 from flask import Flask, render_template, request, jsonify, Response
 from flask_cors import CORS
 import time
+
+# ── Cargar .env ANTES de cualquier import del proyecto ───────────────────────
+# Garantiza que os.getenv() en los providers devuelva los valores reales
+# aunque app.py se importe directamente (sin pasar por run_web.py).
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _env = Path(__file__).parent.parent.parent / ".env"
+    _load_dotenv(_env if _env.exists() else None, override=True)
+except ImportError:
+    pass
 
 # Añadir el directorio raíz al path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))

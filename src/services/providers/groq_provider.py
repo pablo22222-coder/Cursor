@@ -4,10 +4,11 @@ Modelo: llama-3.2-3b-preview
 Prioridad: Velocidad (inferencia más rápida disponible)
 """
 import os
-import json
 import requests
 
 from src.services.providers.base_provider import BaseProvider, AIResponse, ProviderError
+
+_ENV_KEY = "GROQ_API_KEY"
 
 
 class GroqProvider(BaseProvider):
@@ -18,14 +19,22 @@ class GroqProvider(BaseProvider):
     _API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
     def __init__(self):
-        self._api_key = os.getenv("GROQ_API_KEY", "")
+        # Leer en tiempo de init para el log de arranque, pero siempre releer en is_available/complete
+        key = os.getenv(_ENV_KEY, "")
+        status = "✓ OK" if len(key) > 10 else "✗ MISSING"
+        print(f"[AIManager] Cargando proveedor Groq...           {status}")
+
+    @property
+    def _api_key(self) -> str:
+        """Lectura lazy — siempre lee el valor actual del entorno."""
+        return os.getenv(_ENV_KEY, "")
 
     def is_available(self) -> bool:
-        return bool(self._api_key and len(self._api_key) > 10)
+        return len(self._api_key) > 10
 
     def complete(self, prompt: str, system_prompt: str = "") -> AIResponse:
         if not self.is_available():
-            raise ValueError("GROQ_API_KEY no configurada")
+            raise ValueError(f"{_ENV_KEY} no configurada")
 
         messages = []
         if system_prompt:

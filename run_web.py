@@ -10,6 +10,21 @@ Uso:
 import argparse
 import sys
 import os
+from pathlib import Path
+
+# ── CRÍTICO: cargar .env ANTES de cualquier otro import del proyecto ──────────
+# Si dotenv se carga tarde, os.getenv() en los providers devuelve '' y los LLM
+# se marcan como no disponibles aunque la API key esté correctamente en .env.
+try:
+    from dotenv import load_dotenv
+    _env_path = Path(__file__).parent / ".env"
+    if _env_path.exists():
+        load_dotenv(_env_path, override=True)
+        print(f"[Entorno] .env cargado desde {_env_path}")
+    else:
+        load_dotenv(override=True)   # busca automáticamente
+except ImportError:
+    print("[Entorno] ⚠️  python-dotenv no instalado — las API keys deben estar en variables de sistema")
 
 # Añadir el directorio raíz al path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

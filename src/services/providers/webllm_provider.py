@@ -82,6 +82,14 @@ class WebLLMProvider(BaseProvider):
     model    = "Llama-3.2-3B-Instruct-Q4_K_M"
     priority = 4
 
+    def __init__(self):
+        try:
+            import llama_cpp  # noqa: F401
+            status = "✓ OK (llama-cpp-python instalado)"
+        except ImportError:
+            status = "⚠ OPCIONAL (pip install llama-cpp-python para activar)"
+        print(f"[AIManager] Cargando proveedor WebLLM-Local...   {status}")
+
     def is_available(self) -> bool:
         """True si llama-cpp-python está instalado."""
         try:

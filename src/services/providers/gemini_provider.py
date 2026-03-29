@@ -8,6 +8,8 @@ import requests
 
 from src.services.providers.base_provider import BaseProvider, AIResponse, ProviderError
 
+_ENV_KEY = "GEMINI_API_KEY"
+
 
 class GeminiProvider(BaseProvider):
     name     = "Gemini"
@@ -17,14 +19,20 @@ class GeminiProvider(BaseProvider):
     _API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
     def __init__(self):
-        self._api_key = os.getenv("GEMINI_API_KEY", "")
+        key = os.getenv(_ENV_KEY, "")
+        status = "✓ OK" if len(key) > 10 else "✗ MISSING"
+        print(f"[AIManager] Cargando proveedor Gemini...          {status}")
+
+    @property
+    def _api_key(self) -> str:
+        return os.getenv(_ENV_KEY, "")
 
     def is_available(self) -> bool:
-        return bool(self._api_key and len(self._api_key) > 10)
+        return len(self._api_key) > 10
 
     def complete(self, prompt: str, system_prompt: str = "") -> AIResponse:
         if not self.is_available():
-            raise ValueError("GEMINI_API_KEY no configurada")
+            raise ValueError(f"{_ENV_KEY} no configurada")
 
         # Gemini REST API: system_prompt va como systemInstruction
         body: dict = {
