@@ -260,11 +260,20 @@ class HybridContactExtractor:
         'facebook': re.compile(r'https?://(?:www\.)?facebook\.com/[a-zA-Z0-9.]+/?', re.IGNORECASE),
     }
     
-    def __init__(self, max_workers: int = MAX_WORKERS, on_progress: Callable = None, fast_mode: bool = False):
+    def __init__(
+        self,
+        max_workers: int = MAX_WORKERS,
+        on_progress: Callable = None,
+        fast_mode: bool = False,
+        tab_count_fn: Callable = None,
+    ):
         self.max_workers = max_workers
         self.semaphore = None
         self.on_progress = on_progress
         self.fast_mode = fast_mode  # True → solo Katana, 15s timeout por dominio
+        # Callable () → int: devuelve cuántas pestañas están permitidas ahora.
+        # Si es None se usa el valor por defecto (3).
+        self._tab_count_fn = tab_count_fn
         self.completed = 0
         self.total = 0
         self.katana_hits = 0
@@ -753,12 +762,16 @@ class HybridContactExtractor:
             # Evento compartido: en cuanto una pestaña encuentra email → cancela las demás
             found_event = asyncio.Event()
 
-            # Seleccionar las 3 URLs de alta prioridad para las pestañas
-            tab_pages = [
+            # Respetar el límite de pestañas impuesto por el throttle (1, 2 o 3)
+            allowed_tabs = self._tab_count_fn() if self._tab_count_fn else 3
+            allowed_tabs = max(1, min(3, allowed_tabs))
+
+            _all_tab_pages = [
                 (url, "home"),
-                (urljoin(url, HIGH_VALUE_PATHS[0]), HIGH_VALUE_PATHS[0].strip("/")),  # /contacto
-                (urljoin(url, HIGH_VALUE_PATHS[3]), HIGH_VALUE_PATHS[3].strip("/")),  # /legal
+                (urljoin(url, HIGH_VALUE_PATHS[0]), HIGH_VALUE_PATHS[0].strip("/")),
+                (urljoin(url, HIGH_VALUE_PATHS[3]), HIGH_VALUE_PATHS[3].strip("/")),
             ]
+            tab_pages = _all_tab_pages[:allowed_tabs]
 
             # Lanzar las 3 pestañas simultáneamente
             tab_tasks = [

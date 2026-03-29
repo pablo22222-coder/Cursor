@@ -36,6 +36,7 @@ from src.web_analyzer.parallel_extractor import extract_contacts_parallel
 from src.web_analyzer.parallel_wappalyzer import analyze_technologies_parallel, ParallelWappalyzerAnalyzer
 from src.web_analyzer.hybrid_extractor import extract_contacts_hybrid
 from src.web_analyzer.domain_pipeline import DomainPipelineOrchestrator, NUM_WORKERS
+from src.utils.resource_throttle import reset_throttle, get_throttle
 from src.utils.helpers import export_to_json, export_to_csv
 
 # Timeout para fallback sin filtro de tecnología (segundos)
@@ -286,6 +287,9 @@ def create_app():
                     else:
                         search_state["status"] = f"Procesando... {completed}/{total}"
 
+                # Crear throttle fresco para esta búsqueda
+                throttle = reset_throttle()
+
                 orchestrator = DomainPipelineOrchestrator(
                     analysis=analysis,
                     tech_requirements=tech_requirements,
@@ -293,6 +297,7 @@ def create_app():
                     fast_mode=fast_mode,
                     max_results=max_results,
                     on_progress=on_pipeline_progress,
+                    throttle=throttle,
                 )
 
                 final_results = orchestrator.run(search_results)
@@ -326,6 +331,7 @@ def create_app():
     @app.route('/api/status')
     def status():
         """Endpoint para obtener estado de la búsqueda."""
+        throttle_data = get_throttle().status_dict()
         return jsonify({
             "is_searching":  search_state["is_searching"],
             "progress":      search_state["progress"],
@@ -333,6 +339,7 @@ def create_app():
             "results_count": len(search_state["results"]),
             "analysis":      search_state["analysis"],
             "workers":       search_state.get("workers", []),
+            "throttle":      throttle_data,
         })
     
     @app.route('/api/results')

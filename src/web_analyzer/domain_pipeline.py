@@ -8,14 +8,11 @@ de forma completamente independiente:
   Fase 2 (Tecnología)  → Detecta tech-stack si hay filtros must_have/must_not
   Fase 3 (Extracción)  → Scraping de contactos (Katana o Katana+Playwright)
 
-3 workers en paralelo con ThreadPoolExecutor. Cada worker publica su estado
-individual en tiempo real vía worker_states[], que el frontend consume.
-
-Ventajas respecto a la arquitectura por fases global:
-- Un dominio lento no bloquea a los demás (antes se esperaba a toda la fase)
-- Si un worker encuentra el email en Fase 1 no necesita esperar al resto
-- Visibilidad en tiempo real de qué hace exactamente cada worker
-- Playwright abre instancias independientes por worker (no compartidas)
+3 workers en paralelo. Integra ResourceThrottle para escalar dinámicamente:
+  - El número de pestañas por worker lo dicta throttle.tabs en tiempo real
+  - Si throttle.workers < workers_activos, los workers excedentes esperan
+    (no toman nuevos dominios) hasta que el nivel suba
+  - Si throttle.should_stop → el pipeline termina de forma segura
 """
 import threading
 import queue
@@ -29,8 +26,9 @@ from src.web_analyzer.parallel_wappalyzer import (
     WAPPALYZER_TIMEOUT,
 )
 from src.web_analyzer.hybrid_extractor import HybridContactExtractor
+from src.utils.resource_throttle import ResourceThrottle
 
-# Número fijo de workers paralelos
+# Número máximo de workers (el throttle puede reducirlo dinámicamente)
 NUM_WORKERS = 3
 
 # Labels de fase para la UI
@@ -97,6 +95,7 @@ class DomainPipelineOrchestrator:
         max_results: int = 20,
         on_result: Optional[Callable] = None,
         on_progress: Optional[Callable] = None,
+        throttle: Optional[ResourceThrottle] = None,
     ):
         self.analysis = analysis
         self.tech_requirements = tech_requirements
@@ -105,6 +104,7 @@ class DomainPipelineOrchestrator:
         self.max_results = max_results
         self.on_result = on_result        # callback(domain_info)  cuando un dominio termina
         self.on_progress = on_progress    # callback(worker_states, completed, total)
+        self.throttle = throttle          # ResourceThrottle o None
 
         self.has_tech_filters = bool(
             tech_requirements.get("must_have") or
@@ -186,17 +186,44 @@ class DomainPipelineOrchestrator:
         """
         Ciclo autónomo del worker: toma dominios de la cola uno a uno
         y ejecuta el pipeline completo para cada uno.
+
+        Integración con ResourceThrottle:
+        - Si throttle.should_stop → señaliza _enough y termina inmediatamente
+        - Si worker_idx >= throttle.workers → pausa (sin tomar nuevos dominios)
+          hasta que el nivel del throttle suba y libere este índice de worker
+        - El número de pestañas lo consulta tab_count_fn() en cada llamada
+          a HybridContactExtractor (valor dinámico en tiempo real)
         """
         state = self.worker_states[worker_idx]
         state.update("idle", "", "Esperando dominio...")
+
+        # tab_count_fn: consultada en cada dominio, retorna el límite actual
+        def tab_count_fn():
+            if self.throttle:
+                return self.throttle.tabs
+            return 3
 
         # Cada worker tiene su propio extractor Playwright (instancia independiente)
         extractor = HybridContactExtractor(
             max_workers=1,
             fast_mode=self.fast_mode,
+            tab_count_fn=tab_count_fn,
         )
 
         while True:
+            # ── Comprobar parada total del throttle ──────────────────────
+            if self.throttle and self.throttle.should_stop:
+                state.update("idle", "", "Detenido por throttle (Nivel 5)")
+                self._enough.set()
+                break
+
+            # ── Pausa si el throttle ha reducido workers por debajo de nuestro índice
+            # (worker_idx es 0-based; throttle.workers es cuántos activos se permiten)
+            if self.throttle and (worker_idx >= self.throttle.workers):
+                state.update("idle", "", f"En pausa (throttle: {self.throttle.workers} workers activos)")
+                time.sleep(1.0)
+                continue
+
             try:
                 search_result = self._queue.get(timeout=0.5)
             except queue.Empty:

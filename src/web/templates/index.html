@@ -234,6 +234,62 @@
         </div>
     </div>
 
+    <!-- ── Resource Throttle Monitor Panel ─────────────────────────────── -->
+    <div id="throttle-panel" class="hidden fixed bottom-4 right-4 z-40 w-64 bg-gray-900 text-white rounded-xl shadow-2xl overflow-hidden text-xs select-none">
+        <!-- Header -->
+        <div class="flex items-center justify-between px-3 py-2 bg-gray-800 cursor-pointer" onclick="toggleThrottlePanel()">
+            <div class="flex items-center gap-2">
+                <span id="throttle-emoji" class="text-base">🟢</span>
+                <span class="font-semibold tracking-wide">Monitor de Sistema</span>
+            </div>
+            <span id="throttle-toggle-icon" class="text-gray-400 text-lg leading-none">▾</span>
+        </div>
+        <!-- Body (collapsible) -->
+        <div id="throttle-body" class="px-3 py-2 space-y-2">
+            <!-- Level badge -->
+            <div class="flex items-center justify-between">
+                <span class="text-gray-400">Nivel actual</span>
+                <span id="throttle-level-badge" class="font-bold text-green-400">Nivel 0 · Normal</span>
+            </div>
+            <!-- Workers / Tabs -->
+            <div class="flex items-center justify-between text-gray-300">
+                <span>Workers activos</span>
+                <span id="throttle-workers" class="font-mono font-semibold">3</span>
+            </div>
+            <div class="flex items-center justify-between text-gray-300">
+                <span>Pestañas/worker</span>
+                <span id="throttle-tabs" class="font-mono font-semibold">3</span>
+            </div>
+            <!-- CPU bar -->
+            <div>
+                <div class="flex justify-between text-gray-400 mb-0.5">
+                    <span>CPU</span>
+                    <span id="throttle-cpu-val">0%</span>
+                </div>
+                <div class="w-full bg-gray-700 rounded h-1.5">
+                    <div id="throttle-cpu-bar" class="h-1.5 rounded transition-all duration-500 bg-green-500" style="width:0%"></div>
+                </div>
+            </div>
+            <!-- RAM bar -->
+            <div>
+                <div class="flex justify-between text-gray-400 mb-0.5">
+                    <span>RAM</span>
+                    <span id="throttle-ram-val">0%</span>
+                </div>
+                <div class="w-full bg-gray-700 rounded h-1.5">
+                    <div id="throttle-ram-bar" class="h-1.5 rounded transition-all duration-500 bg-blue-500" style="width:0%"></div>
+                </div>
+            </div>
+            <!-- History log -->
+            <div>
+                <p class="text-gray-500 mb-1 uppercase tracking-wider text-[10px]">Historial</p>
+                <div id="throttle-history" class="space-y-0.5 max-h-24 overflow-y-auto text-gray-400">
+                    <p class="italic text-gray-600">Sin eventos</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Notification -->
     <div id="notification" class="hidden fixed top-4 right-4 z-50">
         <div class="notification bg-gray-900 text-white px-4 py-3 rounded-lg shadow-lg flex items-center gap-2">
@@ -545,6 +601,81 @@
             document.getElementById('send-loading').classList.toggle('hidden', !loading);
         }
 
+        // ── Throttle Monitor ─────────────────────────────────────────────
+        let throttlePanelOpen = true;
+        let throttlePollingInterval = null;
+
+        function toggleThrottlePanel() {
+            throttlePanelOpen = !throttlePanelOpen;
+            document.getElementById('throttle-body').style.display = throttlePanelOpen ? '' : 'none';
+            document.getElementById('throttle-toggle-icon').textContent = throttlePanelOpen ? '▾' : '▸';
+        }
+
+        function updateThrottlePanel(t) {
+            if (!t) return;
+            const panel = document.getElementById('throttle-panel');
+            panel.classList.remove('hidden');
+
+            // Emoji + level badge
+            document.getElementById('throttle-emoji').textContent = t.emoji || '🟢';
+            const levelColors = {0:'text-green-400', 1:'text-yellow-400', 2:'text-orange-400',
+                                 3:'text-red-400',   4:'text-red-600',    5:'text-red-700'};
+            const badge = document.getElementById('throttle-level-badge');
+            badge.textContent = `Nivel ${t.level} · ${t.label}`;
+            badge.className = `font-bold ${levelColors[t.level] || 'text-gray-300'}`;
+
+            // Workers / tabs
+            document.getElementById('throttle-workers').textContent = t.workers;
+            document.getElementById('throttle-tabs').textContent    = t.tabs;
+
+            // CPU bar
+            const cpu = t.cpu || 0;
+            document.getElementById('throttle-cpu-val').textContent = cpu.toFixed(1) + '%';
+            const cpuBar = document.getElementById('throttle-cpu-bar');
+            cpuBar.style.width = cpu + '%';
+            cpuBar.className = `h-1.5 rounded transition-all duration-500 ${
+                cpu > 85 ? 'bg-red-500' : cpu > 65 ? 'bg-yellow-400' : 'bg-green-500'
+            }`;
+
+            // RAM bar
+            const ram = t.ram || 0;
+            document.getElementById('throttle-ram-val').textContent = ram.toFixed(1) + '%';
+            const ramBar = document.getElementById('throttle-ram-bar');
+            ramBar.style.width = ram + '%';
+            ramBar.className = `h-1.5 rounded transition-all duration-500 ${
+                ram > 90 ? 'bg-red-500' : ram > 70 ? 'bg-yellow-400' : 'bg-blue-500'
+            }`;
+
+            // History log
+            if (t.history && t.history.length) {
+                const container = document.getElementById('throttle-history');
+                container.innerHTML = t.history.slice().reverse().map(entry =>
+                    `<p class="leading-relaxed">${entry}</p>`
+                ).join('');
+            }
+        }
+
+        function startThrottlePolling() {
+            if (throttlePollingInterval) return;
+            throttlePollingInterval = setInterval(async () => {
+                try {
+                    const r = await fetch('/api/status');
+                    const d = await r.json();
+                    if (d.throttle) updateThrottlePanel(d.throttle);
+                } catch (_) {}
+            }, 1500);
+        }
+
+        function stopThrottlePolling() {
+            if (throttlePollingInterval) {
+                clearInterval(throttlePollingInterval);
+                throttlePollingInterval = null;
+            }
+        }
+
+        // Start passive throttle polling immediately (even when not searching)
+        startThrottlePolling();
+
         // Phase colours for the worker panel
         const PHASE_COLORS = {
             idle:     'text-gray-300',
@@ -593,6 +724,7 @@
 
                     updateLoadingStatus(loadingId, `${status.status} (${status.progress}%)`);
                     updateWorkerPanel(loadingId, status.workers);
+                    if (status.throttle) updateThrottlePanel(status.throttle);
 
                     if (!status.is_searching && status.progress >= 100) {
                         stopPolling();
