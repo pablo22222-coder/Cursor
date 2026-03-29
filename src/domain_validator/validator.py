@@ -235,7 +235,11 @@ class DomainValidator:
                 confidence += 50 * 0.2  # Neutral si no se usa
             
             # 4. Análisis de rendimiento (solo si el prompt lo requiere)
-            if self.use_pagespeed and (analysis.check_performance or analysis.check_seo or analysis.check_mobile):
+            if self.use_pagespeed and (
+                getattr(analysis, 'check_performance', False) or
+                getattr(analysis, 'check_seo', False) or
+                getattr(analysis, 'check_mobile', False)
+            ):
                 perf_score = self._analyze_performance(search_result.url, analysis)
                 confidence += perf_score * 0.1  # 10% del peso
                 
@@ -252,7 +256,8 @@ class DomainValidator:
         except Exception as e:
             result.error_message = str(e)
             result.analysis_complete = False
-        
+            print(f"[Validator] ERROR en {getattr(result, 'domain', '?')}: {e}")
+
         return result
     
     def _analyze_search_snippet(self, title: str, snippet: str, analysis: PromptAnalysis) -> float:
@@ -991,7 +996,7 @@ class DomainValidator:
             score = 50.0
             
             # Verificar criterios de rendimiento
-            if analysis.performance_criteria:
+            if getattr(analysis, 'performance_criteria', None):
                 criteria = analysis.performance_criteria.lower()
                 
                 if "lenta" in criteria or "slow" in criteria:
@@ -1008,7 +1013,7 @@ class DomainValidator:
                         score += 20
             
             # Verificar mobile friendly si se requiere
-            if analysis.check_mobile:
+            if getattr(analysis, 'check_mobile', False):
                 if metrics.is_mobile_friendly:
                     score += 20
                 else:

@@ -272,6 +272,13 @@ class DomainPipelineOrchestrator:
             return
 
         if not (validation.analysis_complete and validation.confidence_score >= 40):
+            reason = (
+                f"analysis_complete={validation.analysis_complete}, "
+                f"score={validation.confidence_score:.0f}"
+            )
+            if validation.error_message:
+                reason += f", error={validation.error_message[:80]}"
+            print(f"[Pipeline] ✗ {domain} — {reason}")
             state.update("rejected", domain, f"Confianza baja ({validation.confidence_score:.0f})")
             self._mark_completed()
             return

@@ -146,6 +146,12 @@ class SearchIntent:
     target_audience: Optional[str] = None
     language: str = "es"
 
+    # Métricas extra (compatibilidad con DomainValidator)
+    check_performance: bool = False
+    check_seo: bool = False
+    check_mobile: bool = False
+    performance_criteria: Optional[str] = None
+
     # Filtros tecnológicos (para Wappalyzer en Fase 2)
     must_have: List[str] = field(default_factory=list)
     must_not: List[str] = field(default_factory=list)
