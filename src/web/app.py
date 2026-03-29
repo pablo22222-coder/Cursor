@@ -33,7 +33,6 @@ except ImportError:
 # Añadir el directorio raíz al path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from src.prompt_interpreter.intent_detector import IntentDetector
 from src.services.ai_interpreter import AIInterpreter, SearchIntent
 from src.web_search.serper_search import SerperSearch, SearchResult
 from src.domain_validator.validator import DomainValidator
@@ -350,29 +349,32 @@ def create_app():
     
     @app.route('/api/analyze', methods=['POST'])
     def analyze_prompt():
-        """Endpoint para solo analizar el prompt sin buscar."""
+        """Endpoint para analizar un prompt sin lanzar búsqueda completa."""
         data = request.json
         prompt = data.get('prompt', '').strip()
-        
+
         if not prompt:
             return jsonify({"error": "El prompt es requerido"}), 400
-        
+
         try:
-            detector = IntentDetector()
-            intent = detector.detect(prompt)
-            
+            intent: SearchIntent = AIInterpreter().interpret(prompt)
             return jsonify({
-                "business_type": intent.business_type,
-                "confidence": round(intent.business_type_confidence * 100, 1),
-                "product_category": intent.product_category,
-                "service_type": intent.service_type,
-                "industry": intent.industry,
-                "niche": intent.niche,
-                "style": intent.style,
-                "location": intent.location,
-                "target_audience": intent.target_audience,
-                "price_range": intent.price_range,
-                "main_keywords": intent.main_keywords
+                "business_type":         intent.business_type,
+                "product_category":      intent.product_category,
+                "service_type":          intent.service_type,
+                "niche":                 intent.niche,
+                "location":              intent.location,
+                "target_audience":       intent.target_audience,
+                "language":              intent.language,
+                "must_have":             intent.must_have,
+                "must_not":              intent.must_not,
+                "queries_count":         len(intent.search_queries),
+                "search_queries":        intent.search_queries,
+                "validation_indicators": intent.validation_indicators,
+                "exclusion_indicators":  intent.exclusion_indicators,
+                "confidence":            intent.confidence,
+                "analysis_notes":        intent.analysis_notes,
+                "provider_used":         intent.provider_used,
             })
         except Exception as e:
             return jsonify({"error": str(e)}), 500
