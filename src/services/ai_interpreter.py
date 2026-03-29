@@ -1,16 +1,16 @@
 """
 AIInterpreter — Intérprete unificado de prompts con fallback entre 5 proveedores LLM.
 
-Reemplaza completamente a SemanticParser + GeminiInterpreter.
-Una sola llamada a AIInterpreter.interpret(prompt) devuelve un SearchIntent
-con TODO lo que el resto del sistema necesita:
+Persona: Senior OSINT Specialist & Lead Generation Strategist.
 
-  · business_type        → tipo de negocio real que busca el usuario
-  · niche / location     → nicho específico y geografía
-  · must_have / must_not → filtros de tecnología (Wappalyzer)
-  · search_queries       → queries creadas por la IA bajo demanda, no plantillas
-  · validation_indicators → palabras clave que confirman que una web ES lo buscado
-  · exclusion_indicators  → palabras que indican que NO es lo buscado
+Una sola llamada a AIInterpreter.interpret(prompt) hace TODO en un paso:
+  1. Interpreta y depura el prompt del usuario
+  2. Extrae todos los parámetros implícitos y explícitos
+  3. Genera 15 queries optimizadas y complejas con operadores avanzados
+  4. Devuelve los indicadores de validación para comprobar cada web
+
+Aplica tanto al modo normal (prompt del usuario) como al modo Producto
+(prospect_prompt generado por ProductAnalyzer antes de llegar aquí).
 
 Cadena de fallback (< 1 segundo de transición entre proveedores):
   0 → Groq          llama-3.2-3b-preview   (velocidad)
@@ -32,94 +32,124 @@ from src.services.ai_manager import get_ai_manager
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  PROMPTS EXPERTOS
+#  PROMPTS — Senior OSINT Specialist & Lead Generation Strategist
 # ─────────────────────────────────────────────────────────────────────────────
 
 _SYSTEM_PROMPT = """\
-Eres un experto en prospección digital B2B/B2C con 15 años de experiencia \
-encontrando negocios reales en internet. Tu especialidad es traducir peticiones \
-en lenguaje natural a estrategias de búsqueda quirúrgicas que localicen \
-EMPRESAS Y WEBS OPERATIVAS, nunca artículos informativos ni directorios.
+Eres un Senior OSINT Specialist & Lead Generation Strategist con 15 años de \
+experiencia en inteligencia competitiva y prospección de alto rendimiento.
 
-REGLA FUNDAMENTAL: el usuario quiere encontrar webs que SEAN ese negocio, \
-no webs que HABLEN sobre ese tipo de negocio.
+Tu misión es interpretar el prompt del usuario con total claridad, depurarlo \
+para que quede bien estructurado, y crear exactamente 15 queries optimizadas \
+y super complejas que sean capaces de encontrar la web exacta que ha descrito \
+el usuario.
 
-EJEMPLOS DE DISTINCIÓN:
-  ✗ MAL → artículo "Qué es un ecommerce de electrónica"
-  ✓ BIEN → tienda online real que vende electrónica con carrito y precios
-  ✗ MAL → "Las 10 mejores agencias de marketing digital"
-  ✓ BIEN → una agencia real con página de servicios, equipo y contacto
-  ✗ MAL → "Cómo crear un SaaS de gestión de proyectos"
-  ✓ BIEN → una herramienta SaaS real con pricing, trial o demo
+PRINCIPIOS FUNDAMENTALES:
+1. El usuario quiere encontrar webs que SEAN ese negocio, nunca artículos \
+   que hablen sobre él ni directorios ni comparativas.
+2. Piensa en TODOS los parámetros posibles del prompt: sector, nicho, \
+   geografía, tecnología, modelo de negocio, tamaño, idioma, restricciones.
+3. Cada query debe ser quirúrgica, distinta a las demás, y cubrir un ángulo \
+   diferente de búsqueda (footprint técnico, señales comerciales, patrones \
+   de lenguaje, operadores booleanos, intitle/inurl, sector slang, etc.).
+4. Varía el nivel de especificidad: desde queries muy concretas hasta queries \
+   más amplias que capturen long-tail.
+5. Si hay negaciones ("sin X", "no usa Y"): genera queries que busquen \
+   alternativas o webs que no mencionan esa tecnología.
+6. Para cada web encontrada, debes saber exactamente qué comprobar: \
+   validation_indicators son los criterios de aceptación, \
+   exclusion_indicators son los criterios de rechazo.
 
-CRITERIOS DE CALIDAD PARA QUERIES:
-  · Usa términos que los CLIENTES reales usarían para contratar/comprar
-  · Combina intención comercial con términos descriptivos del sector
-  · Incluye operadores implícitos: palabras como "comprar", "contratar", "precio",
-    "presupuesto", "demo", "trial", "contactar"
-  · Varía idioma (español e inglés) si el nicho es internacional
-  · Si hay ubicación: incluye ciudad/país en algunas queries
-  · Si hay negación ("sin X"): genera queries que encuentren alternativas a X
-  · Genera entre 8 y 15 queries ordenadas de mayor a menor especificidad
+TÉCNICAS AVANZADAS DE QUERY PARA USAR:
+  · Operadores Google: intitle: inurl: site: filetype: -exclusion "frase exacta"
+  · Boolean: OR AND
+  · Footprint técnico: "powered by X" "built with Y" generator=Z
+  · Señales de intención comercial: "precio" "contratar" "solicitar presupuesto" \
+    "pricing" "get a quote" "free trial" "request demo" "contact us"
+  · Señales de empresa real: "sobre nosotros" "nuestro equipo" "our team" \
+    "quiénes somos" "founded in" "careers" "trabaja con nosotros"
+  · Señales de sector: terminología técnica del nicho que solo usaría \
+    alguien del sector, no un articulista
+  · Slang y terminología regional si hay ubicación específica
 
-RESPONDE ÚNICAMENTE con un objeto JSON válido, sin texto previo, sin bloques \
-de código markdown, sin explicaciones. El JSON debe empezar con { y terminar con }.\
+RESPONDE ÚNICAMENTE con un objeto JSON válido. Sin texto previo, sin bloques \
+markdown, sin explicaciones. Solo el JSON, empezando con { y terminando con }.\
 """
 
 _USER_PROMPT_TEMPLATE = """\
-Analiza en profundidad la siguiente petición de búsqueda y devuelve el JSON \
-con la estructura exacta indicada.
-
-PETICIÓN DEL USUARIO:
+PROMPT DEL USUARIO:
 "{prompt}"
 
-ESTRUCTURA JSON REQUERIDA:
+Interpreta este prompt con total claridad, depúralo y extrae todos sus \
+parámetros. Luego genera exactamente 15 queries optimizadas y super complejas \
+para encontrar las webs que describe.
+
+ESTRUCTURA JSON REQUERIDA (devuelve exactamente este formato):
 {{
-  "business_type": "tipo de negocio exacto (ecommerce | saas | agencia | \
-consultoria | marketplace | directorio | blog | app | plataforma | \
-servicio_local | corporativa | portfolio | otro)",
+  "prompt_depurado": "versión limpia y bien estructurada del prompt original, \
+sin ambigüedades",
+
+  "business_type": "tipo de negocio (ecommerce | saas | agencia | consultoria \
+| marketplace | directorio | blog | app | plataforma | servicio_local | \
+corporativa | portfolio | otro)",
 
   "product_category": "categoría de producto si aplica, null si no",
   "service_type": "tipo de servicio si aplica, null si no",
-  "niche": "nicho específico si se menciona (luxury, budget, eco, old-money, etc.), null si no",
+  "niche": "nicho específico detectado, null si no hay",
   "location": {{
     "country": "código ISO 2 letras o null",
-    "region": "región/comunidad o null",
+    "region": "región/comunidad autónoma o estado, o null",
     "city": "ciudad o null"
   }},
   "target_audience": "B2B | B2C | ambos | null",
   "language": "es | en | ambos",
 
-  "must_have": ["tecnologías o categorías que la web DEBE tener, array vacío si no"],
-  "must_not": ["tecnologías o categorías que la web NO debe tener, array vacío si no"],
+  "must_have": ["tecnologías o características que la web DEBE tener"],
+  "must_not": ["tecnologías o características que la web NO debe tener"],
 
   "search_queries": [
-    "lista de 8 a 15 queries específicas creadas para este prompt concreto",
-    "NO uses plantillas genéricas — cada query debe ser única y pensada para este caso",
-    "mezcla español e inglés según el mercado objetivo",
-    "incluye queries con intención comercial directa"
+    "EXACTAMENTE 15 queries — cada una distinta, usando técnicas OSINT avanzadas",
+    "Query 1: muy específica con operadores (intitle/inurl/\"frase exacta\")",
+    "Query 2: footprint técnico ('powered by', generator, etc.)",
+    "Query 3: señal comercial directa (precio, contratar, presupuesto)",
+    "Query 4: en inglés con intención de compra (pricing, get quote, hire)",
+    "Query 5: terminología de sector que solo usa un profesional real",
+    "Query 6: con ubicación geográfica si aplica",
+    "Query 7: boolean avanzado (OR entre sinónimos del sector)",
+    "Query 8: inurl con patrones de URL típicos del tipo de web",
+    "Query 9: excluye contenido informativo (-blog -guia -wikipedia -'qué es')",
+    "Query 10: con señales de empresa real (equipo, nosotros, contacto)",
+    "Query 11: long-tail específica del nicho",
+    "Query 12: con tecnología específica si se menciona en el prompt",
+    "Query 13: variante en otro idioma o terminología regional",
+    "Query 14: señal de tamaño/escala si se deduce del prompt",
+    "Query 15: catch-all amplia que capture resultados que las otras no pillaron"
   ],
 
   "validation_indicators": [
-    "palabras o frases que al aparecer en una web confirman que ES lo buscado"
-  ],
-  "exclusion_indicators": [
-    "palabras o frases que al aparecer en una web indican que NO es lo buscado"
+    "palabras, frases o patrones HTML que CONFIRMAN que una web ES lo buscado",
+    "incluye: elementos UI (carrito, botón comprar), terminología del sector, \
+señales de empresa real, patrones de URL, etc."
   ],
 
-  "confidence": número entre 0 y 1 indicando seguridad en el análisis,
-  "analysis_notes": "una línea explicando la estrategia de búsqueda elegida"
+  "exclusion_indicators": [
+    "palabras, frases o patrones que DESCARTAN una web (es informativa, \
+es una plataforma, es un directorio, habla del tema pero no lo es)"
+  ],
+
+  "confidence": 0.0,
+  "analysis_notes": "una línea con la estrategia de búsqueda elegida y \
+por qué esas queries son las más efectivas para este caso concreto"
 }}
 
-INSTRUCCIONES CRÍTICAS PARA search_queries:
-- Analiza el prompt palabra por palabra antes de generar las queries
-- Si el prompt menciona una tecnología en negativo ("sin Shopify"), genera queries
-  que encuentren alternativas, NO webs con Shopify
-- Si hay un nicho muy específico ("old money", "eco-friendly"), úsalo literalmente
-  en algunas queries para máxima precisión
-- Incluye siempre al menos: 3 queries en español, 2 en inglés, 2 con operadores
-  de compra/contacto ("precio", "contratar", "buy", "pricing")
-- Las queries deben ser lo que escribiría un comprador real en Google, no un académico\
+REGLAS ESTRICTAS PARA LAS 15 QUERIES:
+- Deben ser 15, ni más ni menos
+- Ninguna query puede ser una variación trivial de otra (ángulo diferente cada una)
+- No incluyas instrucciones ni comentarios dentro del array, solo las queries reales
+- Cada query debe funcionar tal cual se pega en Google
+- Si el prompt menciona exclusiones ("sin Shopify"), las queries buscan \
+  alternativas, nunca incluyen la tecnología excluida
+- Usa operadores avanzados en al menos 6 de las 15 queries\
 """
 
 
@@ -261,21 +291,33 @@ def _parse_json_response(text: str) -> Dict[str, Any]:
 
 
 def _build_intent(data: Dict[str, Any], original_prompt: str, provider: str) -> SearchIntent:
-    """Construye SearchIntent desde el dict parseado."""
+    """Construye SearchIntent desde el dict parseado por el OSINT Specialist."""
     location = data.get("location") or {}
     if not isinstance(location, dict):
         location = {}
 
-    queries = data.get("search_queries", [])
-    # Filtrar instrucciones que el modelo pudo haber incluido como queries
+    raw_queries = data.get("search_queries", [])
+
+    # Filtrar instrucciones del template que el modelo pudo incluir como queries
+    _SKIP_PREFIXES = (
+        "query ", "exactamente", "ninguna query", "no incluyas", "cada query",
+        "si el prompt", "usa operadores", "lista de", "no uses", "mezcla",
+        "incluye", "deben ser 15",
+    )
     queries = [
-        q for q in queries
-        if isinstance(q, str) and len(q) > 5
-        and not q.lower().startswith("lista de")
-        and not q.lower().startswith("no uses")
-        and not q.lower().startswith("mezcla")
-        and not q.lower().startswith("incluye")
+        q for q in raw_queries
+        if isinstance(q, str)
+        and len(q.strip()) > 8
+        and not any(q.strip().lower().startswith(p) for p in _SKIP_PREFIXES)
     ]
+
+    # El prompt depurado por la IA (si lo devolvió) para notes
+    prompt_depurado = data.get("prompt_depurado", "")
+    notes = str(data.get("analysis_notes", ""))
+    if prompt_depurado:
+        notes = f"Prompt depurado: {prompt_depurado} | {notes}" if notes else f"Prompt depurado: {prompt_depurado}"
+
+    print(f"[AIInterpreter] {provider} generó {len(queries)} queries para: '{original_prompt[:60]}'")
 
     return SearchIntent(
         original_prompt      = original_prompt,
@@ -296,7 +338,7 @@ def _build_intent(data: Dict[str, Any], original_prompt: str, provider: str) -> 
         validation_indicators= list(data.get("validation_indicators") or []),
         exclusion_indicators = list(data.get("exclusion_indicators") or []),
         confidence           = float(data.get("confidence", 0.7)),
-        analysis_notes       = str(data.get("analysis_notes", "")),
+        analysis_notes       = notes,
         provider_used        = provider,
     )
 
@@ -327,7 +369,10 @@ _TECH_REQUIRED = re.compile(
 
 
 def _local_analyze(prompt: str) -> SearchIntent:
-    """Análisis de emergencia basado en regex cuando toda la IA falla."""
+    """
+    Análisis de emergencia basado en regex cuando toda la IA falla.
+    Genera queries más ricas que las anteriores usando heurísticas.
+    """
     p = prompt.lower()
 
     # Detectar tipo de negocio
@@ -337,28 +382,40 @@ def _local_analyze(prompt: str) -> SearchIntent:
             business_type = bt
             break
 
-    # Detectar negaciones tecnológicas
-    must_not = [m.group(1).strip() for m in _TECH_NEGATIONS.finditer(prompt)]
+    # Detectar negaciones y requisitos tecnológicos
+    must_not  = [m.group(1).strip() for m in _TECH_NEGATIONS.finditer(prompt)]
     must_have = [m.group(1).strip() for m in _TECH_REQUIRED.finditer(prompt)]
 
-    # Queries básicas
-    clean_prompt = re.sub(r'\b(?:sin|con|que|no|sin)\b\s+\S+', '', prompt, flags=re.IGNORECASE).strip()
+    # Limpiar prompt de modificadores técnicos
+    core = re.sub(
+        r'\b(?:sin|con|que|no|usando|with|without)\b\s+\S+', '',
+        prompt, flags=re.IGNORECASE
+    ).strip()
+    core = core or prompt
+
+    # Generar queries variadas con señales comerciales y de empresa real
+    exclusion_suffix = '-"qué es" -"guía" -wikipedia -blog -"artículo"'
     queries = [
-        f"{business_type} {clean_prompt}",
-        f"{clean_prompt} sitio web",
-        f"{clean_prompt} contacto",
-        f"{clean_prompt} empresa",
-        f"site:{business_type} {clean_prompt}",
+        f'"{core}" precio contacto {exclusion_suffix}',
+        f'{core} empresa servicios "sobre nosotros"',
+        f'{core} "solicitar presupuesto" OR "pedir información"',
+        f'{core} site:.com OR site:.es {exclusion_suffix}',
+        f'intitle:"{core}" contacto',
+        f'{core} "nuestros servicios" OR "our services"',
+        f'{core} pricing OR "get a quote" OR "free trial"',
+        f'{core} {business_type} España OR Mexico',
+        f'inurl:{business_type} {core}',
+        f'{core} "trabaja con nosotros" OR "contact us" OR "equipo"',
     ]
 
     return SearchIntent(
         original_prompt = prompt,
         business_type   = business_type,
-        search_queries  = [q for q in queries if len(q) > 5],
+        search_queries  = [q for q in queries if len(q) > 8],
         must_have       = must_have,
         must_not        = must_not,
         confidence      = 0.25,
-        analysis_notes  = "Análisis local (emergencia — sin IA disponible)",
+        analysis_notes  = "Análisis local de emergencia (sin IA disponible) — queries mejoradas con heurísticas",
         provider_used   = "local",
     )
 
