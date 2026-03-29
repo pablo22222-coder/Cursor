@@ -19,7 +19,7 @@ import queue
 import time
 from typing import List, Dict, Any, Optional, Callable
 
-from src.domain_validator.validator import DomainValidator
+from src.domain_validator.validator import DomainValidator, ValidationResult
 from src.web_analyzer.parallel_wappalyzer import (
     analyze_single_domain,
     ParallelWappalyzerAnalyzer,
@@ -261,57 +261,69 @@ class DomainPipelineOrchestrator:
         worker_idx: int,
     ):
         # ── FASE 1: Validación de tipo de web ────────────────────────
+        # Modo resiliente: el validador etiqueta y puntúa pero NUNCA descarta.
+        # Un score bajo o un error se registran en domain_info y el dominio
+        # llega al frontend con aviso "Análisis incompleto".
         state.update("phase1", domain, "Analizando HTML + Schema.org...")
         self._notify_progress()
 
+        score = 0.0
+        analysis_ok = False
+        validation_notes = []
+
         try:
             validation = self._validator.validate(search_result, self.analysis)
+            score = validation.confidence_score
+            analysis_ok = validation.analysis_complete
+            if not analysis_ok and validation.error_message:
+                validation_notes.append(f"Análisis incompleto: {validation.error_message[:60]}")
+                print(f"[Pipeline] ⚠ {domain} — análisis incompleto (score={score:.0f}): {validation.error_message[:80]}")
+            else:
+                print(f"[Pipeline] {'✓' if score >= 40 else '~'} {domain} — score={score:.0f}")
         except Exception as e:
-            state.update("rejected", domain, f"Error validación: {e}")
-            self._mark_completed()
-            return
+            validation_notes.append(f"Error en validación: {str(e)[:60]}")
+            print(f"[Pipeline] ⚠ {domain} — excepción en validación: {e}")
+            # Crear objeto mínimo para continuar
+            validation = ValidationResult(domain=domain, url=getattr(search_result, 'url', ''))
+            validation.page_title = getattr(search_result, 'title', '')
 
-        if not (validation.analysis_complete and validation.confidence_score >= 40):
-            reason = (
-                f"analysis_complete={validation.analysis_complete}, "
-                f"score={validation.confidence_score:.0f}"
-            )
-            if validation.error_message:
-                reason += f", error={validation.error_message[:80]}"
-            print(f"[Pipeline] ✗ {domain} — {reason}")
-            state.update("rejected", domain, f"Confianza baja ({validation.confidence_score:.0f})")
-            self._mark_completed()
-            return
-
-        # Construir domain_info con los datos de validación
+        # Construir domain_info — siempre, independientemente del score
         schema_info = {}
-        if validation.schema_data:
-            schema_info = {
-                "types":        validation.schema_data.get("types", [])[:3],
-                "is_ecommerce": validation.schema_data.get("is_ecommerce", False),
-                "is_service":   validation.schema_data.get("is_service_business", False),
-                "has_products": validation.schema_data.get("has_products", False),
-                "product_count":validation.schema_data.get("product_count", 0),
-                "has_reviews":  validation.schema_data.get("has_reviews", False),
-                "rating":       validation.schema_data.get("aggregate_rating"),
-            }
+        if getattr(validation, 'schema_data', None):
+            try:
+                schema_info = {
+                    "types":        validation.schema_data.get("types", [])[:3],
+                    "is_ecommerce": validation.schema_data.get("is_ecommerce", False),
+                    "is_service":   validation.schema_data.get("is_service_business", False),
+                    "has_products": validation.schema_data.get("has_products", False),
+                    "product_count":validation.schema_data.get("product_count", 0),
+                    "has_reviews":  validation.schema_data.get("has_reviews", False),
+                    "rating":       validation.schema_data.get("aggregate_rating"),
+                }
+            except Exception:
+                pass
 
-        title = validation.page_title or ""
+        title = getattr(validation, 'page_title', '') or getattr(search_result, 'title', '') or ""
+        domain_url = getattr(validation, 'url', '') or getattr(search_result, 'url', '')
+        domain_name = getattr(validation, 'domain', '') or domain
+
         domain_info: Dict[str, Any] = {
-            "domain":      validation.domain,
-            "url":         validation.url,
-            "confidence":  round(validation.confidence_score, 1),
-            "title":       title[:60] + "..." if len(title) > 60 else title,
-            "reasons":     validation.validation_reasons[:3],
-            "tech":        [],
-            "tech_profile":None,
-            "is_ecommerce":False,
-            "schema":      schema_info,
-            "tech_match":  False,
-            "contact":     None,
+            "domain":            domain_name,
+            "url":               domain_url,
+            "confidence":        round(score, 1),
+            "title":             title[:60] + "..." if len(title) > 60 else title,
+            "reasons":           getattr(validation, 'validation_reasons', [])[:3],
+            "tech":              [],
+            "tech_profile":      None,
+            "is_ecommerce":      False,
+            "schema":            schema_info,
+            "tech_match":        False,
+            "contact":           None,
+            "analysis_complete": analysis_ok,
+            "analysis_notes":    validation_notes,
         }
 
-        # ── FASE 2: Tecnologías (solo si hay filtros) ─────────────────
+        # ── FASE 2: Tecnologías (solo si hay filtros, resiliente) ─────
         if self.has_tech_filters:
             state.update("phase2", domain, "Ejecutando Wappalyzer...")
             self._notify_progress()
@@ -328,29 +340,20 @@ class DomainPipelineOrchestrator:
                     "chat":      tech_result["categories"]["live_chat"],
                 }
 
-                must_have = (
-                    self.analysis.required_tools
-                    if hasattr(self.analysis, "required_tools") else []
-                )
-                must_not = (
-                    self.analysis.excluded_tools
-                    if hasattr(self.analysis, "excluded_tools") else []
-                )
+                must_have = list(getattr(self.analysis, "required_tools", []) or [])
+                must_not  = list(getattr(self.analysis, "excluded_tools",  []) or [])
 
-                if not self._wappalyzer_checker.check_tech_requirements(
-                    domain_info, must_have, must_not
-                ):
-                    state.update("rejected", domain, "No cumple filtros de tecnología")
-                    self._mark_completed()
-                    return
-
-                domain_info["tech_match"] = True
+                if self._wappalyzer_checker.check_tech_requirements(domain_info, must_have, must_not):
+                    domain_info["tech_match"] = True
+                else:
+                    # Penalización suave: bajamos confidence pero no descartamos
+                    domain_info["confidence"] = max(0.0, domain_info["confidence"] - 15)
+                    domain_info["analysis_notes"].append("No cumple filtros de tecnología")
 
             except Exception as e:
-                # Si Wappalyzer falla, continuamos sin filtro de tech
-                pass
+                domain_info["analysis_notes"].append(f"Wappalyzer no disponible: {str(e)[:40]}")
 
-        # ── FASE 3: Extracción de contacto ───────────────────────────
+        # ── FASE 3: Extracción de contacto (resiliente) ───────────────
         if self.extract_fields:
             mode_label = "Katana (rápido)" if self.fast_mode else "Katana + Playwright"
             state.update("phase3", domain, mode_label)
@@ -361,32 +364,37 @@ class DomainPipelineOrchestrator:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
-                    results = loop.run_until_complete(
+                    extracted = loop.run_until_complete(
                         extractor.extract_all_parallel([domain_info], self.extract_fields)
                     )
-                    if results:
-                        domain_info = results[0]
+                    if extracted:
+                        domain_info = extracted[0]
                         if domain_info.get("contact"):
                             domain_info["contact"]["fields_requested"] = self.extract_fields
                 finally:
                     loop.close()
                     asyncio.set_event_loop(None)
-            except Exception:
+                    del loop
+            except Exception as e:
                 domain_info["contact"] = {
                     "email": None, "phone": None,
                     "all_emails": [], "all_phones": [],
                     "social_media": [], "extraction_success": False,
-                    "extraction_method": "error", "source": "pipeline_error",
+                    "extraction_method": "error",
+                    "source": f"pipeline_error: {str(e)[:40]}",
                     "fields_requested": self.extract_fields,
                 }
         else:
             domain_info["contact"] = None
 
-        # ── Guardar resultado ─────────────────────────────────────────
+        # ── Guardar resultado — siempre llega al frontend ─────────────
         state.update("done", domain, "")
         with self._results_lock:
             self._results.append(domain_info)
             count = len(self._results)
+
+        # Liberar referencias a objetos de análisis ya no necesarios
+        del validation, schema_info
 
         if self.on_result:
             try:

@@ -308,6 +308,7 @@ def create_app():
                 search_state["results"] = final_results
                 search_state["status"] = f"✓ Completado: {len(final_results)} dominios encontrados"
                 search_state["progress"] = 100
+                print(f"[DEBUG] Pipeline terminado — {len(final_results)} dominios en search_state['results']")
 
             except Exception as e:
                 search_state["status"] = f"Error: {str(e)}"
@@ -342,9 +343,23 @@ def create_app():
     @app.route('/api/results')
     def results():
         """Endpoint para obtener resultados."""
+        items = search_state["results"]
+
+        # Garantizar que cada item es un dict serializable (no un objeto de clase)
+        safe_items = []
+        for item in items:
+            if isinstance(item, dict):
+                safe_items.append(item)
+            elif hasattr(item, "to_dict"):
+                safe_items.append(item.to_dict())
+            else:
+                safe_items.append({"domain": str(item), "url": "", "confidence": 0,
+                                   "title": "", "contact": None, "analysis_notes": ["serialization_fallback"]})
+
+        print(f"[DEBUG] Final JSON Payload: {len(safe_items)} items")
         return jsonify({
-            "results": search_state["results"],
-            "analysis": search_state["analysis"]
+            "results":  safe_items,
+            "analysis": search_state["analysis"],
         })
     
     @app.route('/api/analyze', methods=['POST'])
