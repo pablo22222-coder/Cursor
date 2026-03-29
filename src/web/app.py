@@ -34,6 +34,7 @@ except ImportError:
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from src.services.ai_interpreter import AIInterpreter, SearchIntent
+from src.services.product_analyzer import ProductAnalyzer
 from src.web_search.serper_search import SerperSearch, SearchResult
 from src.domain_validator.validator import DomainValidator
 from src.web_analyzer.parallel_analyzer import analyze_domains_parallel, MAX_DOMAINS as PARALLEL_MAX_DOMAINS
@@ -183,27 +184,17 @@ def create_app():
             "results": analyzer_state["results"]
         })
     
-    @app.route('/api/search', methods=['POST'])
-    def search():
-        """Endpoint para iniciar búsqueda de dominios."""
-        if search_state["is_searching"]:
-            return jsonify({"error": "Ya hay una búsqueda en progreso"}), 400
-        
-        data = request.json
-        prompt = data.get('prompt', '').strip()
-        max_results = data.get('max_results', 20)
-        extract_fields = data.get('extract_fields', ['email'])  # Por defecto solo email
-        # "fast" → solo Katana 15s | "precise" → Katana + Playwright (por defecto)
-        extraction_mode = data.get('extraction_mode', 'precise')
-        fast_mode = extraction_mode == 'fast'
-        
-        if not prompt:
-            return jsonify({"error": "El prompt es requerido"}), 400
-        
-        # Solo extraer contactos si hay campos solicitados
+    # ── Lógica central de búsqueda (compartida por /api/search y /api/search/product) ──
+
+    def _launch_search(prompt: str, max_results: int, extract_fields: list,
+                       fast_mode: bool, source_label: str = ""):
+        """
+        Lanza run_search en un thread. `prompt` es siempre el prompt final ya
+        generado (ya sea por el usuario directamente o por ProductAnalyzer).
+        `source_label` se muestra en el status para indicar el modo activo.
+        """
         extract_contacts = len(extract_fields) > 0
-        
-        # Iniciar búsqueda en thread separado
+
         def run_search():
             search_state["is_searching"] = True
             search_state["progress"] = 0
@@ -217,7 +208,8 @@ def create_app():
             try:
                 # ── PASO 0: Interpretar prompt con AIManager ──────────────
                 search_state["progress"] = 5
-                search_state["status"] = "Analizando prompt con IA..."
+                label = f"[{source_label}] " if source_label else ""
+                search_state["status"] = f"{label}Interpretando prompt con IA..."
 
                 intent: SearchIntent = AIInterpreter().interpret(prompt)
 
@@ -234,9 +226,10 @@ def create_app():
                     "provider_used":   intent.provider_used,
                     "confidence":      intent.confidence,
                     "notes":           intent.analysis_notes,
+                    "source_label":    source_label,
+                    "prospect_prompt": prompt,
                 }
 
-                # Build tech_requirements dict compatible with pipeline
                 tech_requirements = {
                     "must_have":            intent.must_have,
                     "must_not":             intent.must_not,
@@ -245,11 +238,11 @@ def create_app():
                 }
 
                 # ── PASO 1: Obtener candidatos con Serper ─────────────────
-                search_state["status"] = f"Buscando con {len(intent.search_queries)} queries generadas por IA..."
+                search_state["status"] = f"{label}Buscando con {len(intent.search_queries)} queries..."
                 searcher = SerperSearch()
                 search_results = searcher.search(intent, max_results=max_results * 3)
                 search_state["progress"] = 35
-                search_state["status"] = f"Candidatos obtenidos: {len(search_results)} — Lanzando 3 workers..."
+                search_state["status"] = f"Candidatos: {len(search_results)} — Lanzando 3 workers..."
 
                 if not search_results:
                     search_state["status"] = "No se encontraron resultados"
@@ -257,36 +250,21 @@ def create_app():
                     search_state["is_searching"] = False
                     return
 
-                # ── PASO 2: Pipeline autónomo por dominio con 3 workers ───
-                # Cada worker toma un dominio de la cola y ejecuta:
-                #   Fase 1 (validación) → Fase 2 (tech) → Fase 3 (contacto)
+                # ── PASO 2: Pipeline autónomo por dominio ─────────────────
                 def on_pipeline_progress(worker_states, completed, total):
-                    # Actualizar estado de cada worker en tiempo real
                     search_state["workers"] = worker_states
-
-                    # Progreso global: 35-99% durante el pipeline
                     if total > 0:
                         pipeline_pct = int((completed / total) * 100)
-                        global_progress = 35 + int(pipeline_pct * 0.64)
-                        search_state["progress"] = min(global_progress, 99)
-
-                    # Construir mensaje de estado con resumen de los 3 workers
-                    active = [
-                        w for w in worker_states
-                        if w["phase"] not in ("idle", "done", "rejected", "error")
-                    ]
+                        search_state["progress"] = min(35 + int(pipeline_pct * 0.64), 99)
+                    active = [w for w in worker_states
+                              if w["phase"] not in ("idle", "done", "rejected", "error")]
                     if active:
-                        parts = [
-                            f"W{w['worker_id']}: [{w['phase_label']}] {w['domain']}"
-                            for w in active[:3]
-                        ]
+                        parts = [f"W{w['worker_id']}: [{w['phase_label']}] {w['domain']}" for w in active[:3]]
                         search_state["status"] = "  |  ".join(parts)
                     else:
                         search_state["status"] = f"Procesando... {completed}/{total}"
 
-                # Crear throttle fresco para esta búsqueda
                 throttle = reset_throttle()
-
                 orchestrator = DomainPipelineOrchestrator(
                     analysis=intent,
                     tech_requirements=tech_requirements,
@@ -308,14 +286,13 @@ def create_app():
                 search_state["results"] = final_results
                 search_state["status"] = f"✓ Completado: {len(final_results)} dominios encontrados"
                 search_state["progress"] = 100
-                print(f"[DEBUG] Pipeline terminado — {len(final_results)} dominios en search_state['results']")
+                print(f"[DEBUG] Final JSON Payload: {len(final_results)} items")
 
             except Exception as e:
                 search_state["status"] = f"Error: {str(e)}"
                 search_state["progress"] = 100
             finally:
                 search_state["is_searching"] = False
-                # Resetear workers a idle al terminar
                 search_state["workers"] = [
                     {"worker_id": i + 1, "phase": "idle", "phase_label": "En espera", "domain": "", "detail": ""}
                     for i in range(NUM_WORKERS)
@@ -323,8 +300,76 @@ def create_app():
 
         thread = threading.Thread(target=run_search)
         thread.start()
-        
+
+    # ── /api/search — búsqueda por prompt del usuario ──────────────────────
+
+    @app.route('/api/search', methods=['POST'])
+    def search():
+        """Inicia búsqueda a partir de un prompt escrito por el usuario."""
+        if search_state["is_searching"]:
+            return jsonify({"error": "Ya hay una búsqueda en progreso"}), 400
+
+        data = request.json
+        prompt = data.get('prompt', '').strip()
+        max_results = data.get('max_results', 20)
+        extract_fields = data.get('extract_fields', ['email'])
+        extraction_mode = data.get('extraction_mode', 'precise')
+        fast_mode = extraction_mode == 'fast'
+
+        if not prompt:
+            return jsonify({"error": "El prompt es requerido"}), 400
+
+        _launch_search(prompt, max_results, extract_fields, fast_mode, source_label="")
         return jsonify({"message": "Búsqueda iniciada"})
+
+    # ── /api/search/product — búsqueda a partir de descripción de producto ─
+
+    @app.route('/api/search/product', methods=['POST'])
+    def search_by_product():
+        """
+        Modo Producto: el usuario describe su producto/servicio.
+        La IA convierte esa descripción en un prompt de prospección
+        (qué web sería el comprador ideal) y lanza la búsqueda normal.
+        La descripción del producto no llega al buscador ni al validador.
+        """
+        if search_state["is_searching"]:
+            return jsonify({"error": "Ya hay una búsqueda en progreso"}), 400
+
+        data = request.json
+        product_description = data.get('product_description', '').strip()
+        max_results = data.get('max_results', 20)
+        extract_fields = data.get('extract_fields', ['email'])
+        extraction_mode = data.get('extraction_mode', 'precise')
+        fast_mode = extraction_mode == 'fast'
+
+        if not product_description:
+            return jsonify({"error": "La descripción del producto es requerida"}), 400
+
+        # Paso 1: convertir descripción de producto en prompt de prospección
+        # (operación síncrona rápida, ~1s con Groq/Cerebras)
+        try:
+            product_analysis = ProductAnalyzer().analyze(product_description)
+        except Exception as e:
+            return jsonify({"error": f"Error al analizar el producto: {str(e)}"}), 500
+
+        prospect_prompt = product_analysis.prospect_prompt
+        print(f"[ProductMode] '{product_description[:60]}' → '{prospect_prompt}'")
+
+        # Paso 2: lanzar el pipeline normal con el prompt generado
+        # La descripción original se olvida aquí — solo viaja el prospect_prompt
+        _launch_search(
+            prompt=prospect_prompt,
+            max_results=max_results,
+            extract_fields=extract_fields,
+            fast_mode=fast_mode,
+            source_label="Modo Producto",
+        )
+
+        return jsonify({
+            "message": "Búsqueda iniciada en modo producto",
+            "prospect_prompt": prospect_prompt,
+            "provider_used": product_analysis.provider_used,
+        })
     
     @app.route('/api/status')
     def status():

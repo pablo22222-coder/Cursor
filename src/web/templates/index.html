@@ -160,6 +160,39 @@
         <!-- Input Area -->
         <div class="border-t border-gray-200 bg-white px-6 py-4">
             <div class="max-w-3xl mx-auto">
+
+                <!-- Search mode toggle: Prompt / Producto -->
+                <div class="flex items-center gap-2 mb-3">
+                    <div class="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+                        <button
+                            id="search-mode-prompt"
+                            onclick="setSearchMode('prompt')"
+                            class="px-3 py-1 text-xs rounded-md font-medium transition-all bg-white text-primary-700 shadow-sm"
+                            title="Escribe directamente qué tipo de web buscas"
+                        >🔍 Buscar por Prompt</button>
+                        <button
+                            id="search-mode-product"
+                            onclick="setSearchMode('product')"
+                            class="px-3 py-1 text-xs rounded-md font-medium transition-all text-gray-500 hover:text-gray-700"
+                            title="Describe tu producto y la IA busca webs que puedan comprarlo"
+                        >📦 Buscar Clientes para mi Producto</button>
+                    </div>
+                </div>
+
+                <!-- Product description (visible solo en modo Producto) -->
+                <div id="product-description-area" class="hidden mb-3">
+                    <div class="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3">
+                        <p class="text-xs font-medium text-blue-700 mb-1">¿Qué producto o servicio vendes?</p>
+                        <textarea
+                            id="product-description-input"
+                            placeholder="Ej: Vendo software de facturación SaaS para autónomos y pymes españolas, precio 29€/mes, integra con contabilidad y permite emitir facturas electrónicas..."
+                            class="w-full text-sm bg-transparent border-none outline-none resize-none text-gray-700 placeholder-gray-400"
+                            rows="3"
+                        ></textarea>
+                        <p class="text-xs text-blue-500 mt-1">La IA convertirá la descripción en un perfil de cliente ideal y buscará webs que puedan comprarte.</p>
+                    </div>
+                </div>
+
                 <!-- Extraction Options -->
                 <div class="flex items-center gap-4 mb-3 flex-wrap">
                     <span class="text-xs text-gray-500">Extraer:</span>
@@ -206,8 +239,9 @@
                     </div>
                 </div>
                 
-                <!-- Input -->
+                <!-- Input row — shared send button, input adapts to mode -->
                 <div class="flex gap-3">
+                    <!-- Prompt mode input -->
                     <input 
                         type="text" 
                         id="prompt-input"
@@ -309,6 +343,7 @@
         let pollingInterval = null;
         let isSearching = false;
         let extractionMode = 'fast'; // 'fast' | 'precise'
+        let searchMode = 'prompt';   // 'prompt' | 'product'
 
         function setExtractionMode(mode) {
             extractionMode = mode;
@@ -326,6 +361,31 @@
                 preciseBtn.classList.remove(...inactiveClass);
                 fastBtn.classList.remove(...activeClass);
                 fastBtn.classList.add(...inactiveClass);
+            }
+        }
+
+        function setSearchMode(mode) {
+            searchMode = mode;
+            const promptBtn  = document.getElementById('search-mode-prompt');
+            const productBtn = document.getElementById('search-mode-product');
+            const promptInput  = document.getElementById('prompt-input');
+            const productArea  = document.getElementById('product-description-area');
+
+            const active   = ['bg-white', 'text-primary-700', 'shadow-sm'];
+            const inactive = ['text-gray-500', 'hover:text-gray-700'];
+
+            if (mode === 'prompt') {
+                promptBtn.classList.add(...active);    promptBtn.classList.remove(...inactive);
+                productBtn.classList.remove(...active); productBtn.classList.add(...inactive);
+                promptInput.classList.remove('hidden');
+                productArea.classList.add('hidden');
+                document.getElementById('send-text').textContent = 'Buscar';
+            } else {
+                productBtn.classList.add(...active);   productBtn.classList.remove(...inactive);
+                promptBtn.classList.remove(...active);  promptBtn.classList.add(...inactive);
+                promptInput.classList.add('hidden');
+                productArea.classList.remove('hidden');
+                document.getElementById('send-text').textContent = 'Buscar Clientes';
             }
         }
 
@@ -371,47 +431,64 @@
         }
 
         async function sendMessage() {
-            const input = document.getElementById('prompt-input');
-            const prompt = input.value.trim();
-            
-            if (!prompt || isSearching) return;
+            if (isSearching) return;
 
-            // Hide welcome, show messages
-            document.getElementById('welcome-message').classList.add('hidden');
-            document.getElementById('new-chat-btn').disabled = false;
+            // ── Obtener entrada según el modo activo ──────────────────────
+            let displayLabel = '';
+            let apiUrl = '';
+            let body = {};
 
-            // Add user message
-            addMessage('user', prompt);
-            input.value = '';
-
-            // Start search
-            isSearching = true;
-            updateSendButton(true);
-
-            // Add loading message
-            const loadingId = addLoadingMessage();
-
-            // Get options
             const extractFields = [];
             if (document.getElementById('extract-email').checked) extractFields.push('email');
             if (document.getElementById('extract-phone').checked) extractFields.push('phone');
             if (document.getElementById('extract-social').checked) extractFields.push('social');
             const maxResults = parseInt(document.getElementById('max-results').value);
+            const commonOptions = { max_results: maxResults, extract_fields: extractFields, extraction_mode: extractionMode };
+
+            if (searchMode === 'product') {
+                const productInput = document.getElementById('product-description-input');
+                const productText  = productInput.value.trim();
+                if (!productText) return;
+
+                displayLabel = `📦 ${productText}`;
+                apiUrl = '/api/search/product';
+                body = { product_description: productText, ...commonOptions };
+                productInput.value = '';
+            } else {
+                const input  = document.getElementById('prompt-input');
+                const prompt = input.value.trim();
+                if (!prompt) return;
+
+                displayLabel = prompt;
+                apiUrl = '/api/search';
+                body = { prompt, ...commonOptions };
+                input.value = '';
+            }
+
+            // Hide welcome, show messages
+            document.getElementById('welcome-message').classList.add('hidden');
+            document.getElementById('new-chat-btn').disabled = false;
+
+            addMessage('user', displayLabel);
+
+            isSearching = true;
+            updateSendButton(true);
+            const loadingId = addLoadingMessage();
 
             try {
-                const response = await fetch('/api/search', {
+                const response = await fetch(apiUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        prompt,
-                        max_results: maxResults,
-                        extract_fields: extractFields,
-                        extraction_mode: extractionMode
-                    })
+                    body: JSON.stringify(body)
                 });
 
                 if (response.ok) {
-                    startPolling(loadingId, prompt);
+                    // En modo producto el backend devuelve el prospect_prompt generado
+                    const respData = await response.json();
+                    const labelForPolling = respData.prospect_prompt
+                        ? `🎯 ${respData.prospect_prompt}`
+                        : displayLabel;
+                    startPolling(loadingId, labelForPolling);
                 } else {
                     removeLoadingMessage(loadingId);
                     addMessage('error', 'Error al iniciar la búsqueda');
