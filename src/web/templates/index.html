@@ -492,15 +492,30 @@
             message.id = `loading-${messageId}`;
             message.innerHTML = `
                 <div class="flex justify-start">
-                    <div class="bg-white border border-gray-200 px-4 py-3 rounded-2xl rounded-tl-md">
-                        <div class="flex items-center gap-3">
-                            <svg class="animate-spin w-5 h-5 text-primary-600" fill="none" viewBox="0 0 24 24">
+                    <div class="bg-white border border-gray-200 px-4 py-3 rounded-2xl rounded-tl-md min-w-[320px]">
+                        <div class="flex items-center gap-3 mb-2">
+                            <svg class="animate-spin w-5 h-5 text-primary-600 flex-shrink-0" fill="none" viewBox="0 0 24 24">
                                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                             </svg>
                             <div>
                                 <p class="text-sm font-medium text-gray-900">Buscando dominios...</p>
                                 <p id="loading-status-${messageId}" class="text-xs text-gray-500">Iniciando</p>
+                            </div>
+                        </div>
+                        <!-- Worker status panel -->
+                        <div id="workers-panel-${messageId}" class="mt-1 space-y-1">
+                            <div class="worker-row flex items-center gap-2 text-xs text-gray-400 py-0.5">
+                                <span class="font-mono text-gray-300 w-16">W1</span>
+                                <span class="worker-phase">En espera</span>
+                            </div>
+                            <div class="worker-row flex items-center gap-2 text-xs text-gray-400 py-0.5">
+                                <span class="font-mono text-gray-300 w-16">W2</span>
+                                <span class="worker-phase">En espera</span>
+                            </div>
+                            <div class="worker-row flex items-center gap-2 text-xs text-gray-400 py-0.5">
+                                <span class="font-mono text-gray-300 w-16">W3</span>
+                                <span class="worker-phase">En espera</span>
                             </div>
                         </div>
                     </div>
@@ -530,6 +545,46 @@
             document.getElementById('send-loading').classList.toggle('hidden', !loading);
         }
 
+        // Phase colours for the worker panel
+        const PHASE_COLORS = {
+            idle:     'text-gray-300',
+            phase1:   'text-blue-500',
+            phase2:   'text-purple-500',
+            phase3:   'text-amber-500',
+            done:     'text-green-500',
+            rejected: 'text-gray-400',
+            error:    'text-red-400',
+        };
+        const PHASE_ICONS = {
+            idle:     '·',
+            phase1:   '①',
+            phase2:   '②',
+            phase3:   '③',
+            done:     '✓',
+            rejected: '✗',
+            error:    '!',
+        };
+
+        function updateWorkerPanel(loadingId, workers) {
+            if (!workers || !workers.length) return;
+            const panel = document.getElementById(`workers-panel-${loadingId}`);
+            if (!panel) return;
+            const rows = panel.querySelectorAll('.worker-row');
+            workers.forEach((w, i) => {
+                if (!rows[i]) return;
+                const color  = PHASE_COLORS[w.phase] || 'text-gray-400';
+                const icon   = PHASE_ICONS[w.phase]  || '·';
+                const domain = w.domain ? `<span class="text-gray-500 truncate max-w-[160px] inline-block align-bottom">${w.domain}</span>` : '';
+                const detail = w.detail ? `<span class="text-gray-400 ml-1">${w.detail}</span>` : '';
+                rows[i].innerHTML = `
+                    <span class="font-mono font-semibold ${color} w-6 flex-shrink-0">${icon}</span>
+                    <span class="font-medium ${color} flex-shrink-0">W${w.worker_id}</span>
+                    <span class="${color} flex-shrink-0">${w.phase_label}</span>
+                    ${domain}${detail}
+                `;
+            });
+        }
+
         function startPolling(loadingId, prompt) {
             pollingInterval = setInterval(async () => {
                 try {
@@ -537,6 +592,7 @@
                     const status = await response.json();
 
                     updateLoadingStatus(loadingId, `${status.status} (${status.progress}%)`);
+                    updateWorkerPanel(loadingId, status.workers);
 
                     if (!status.is_searching && status.progress >= 100) {
                         stopPolling();

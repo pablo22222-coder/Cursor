@@ -35,6 +35,7 @@ from src.web_analyzer.parallel_analyzer import analyze_domains_parallel, MAX_DOM
 from src.web_analyzer.parallel_extractor import extract_contacts_parallel
 from src.web_analyzer.parallel_wappalyzer import analyze_technologies_parallel, ParallelWappalyzerAnalyzer
 from src.web_analyzer.hybrid_extractor import extract_contacts_hybrid
+from src.web_analyzer.domain_pipeline import DomainPipelineOrchestrator, NUM_WORKERS
 from src.utils.helpers import export_to_json, export_to_csv
 
 # Timeout para fallback sin filtro de tecnología (segundos)
@@ -60,7 +61,12 @@ def create_app():
         "progress": 0,
         "status": "",
         "results": [],
-        "analysis": None
+        "analysis": None,
+        # Estado individual de cada worker (actualizado en tiempo real)
+        "workers": [
+            {"worker_id": i + 1, "phase": "idle", "phase_label": "En espera", "domain": "", "detail": ""}
+            for i in range(NUM_WORKERS)
+        ],
     }
     
     # Estado global para análisis de dominios
@@ -197,265 +203,121 @@ def create_app():
         def run_search():
             search_state["is_searching"] = True
             search_state["progress"] = 0
-            search_state["status"] = "Iniciando búsqueda..."
+            search_state["status"] = "Analizando prompt..."
             search_state["results"] = []
-            
+            search_state["workers"] = [
+                {"worker_id": i + 1, "phase": "idle", "phase_label": "En espera", "domain": "", "detail": ""}
+                for i in range(NUM_WORKERS)
+            ]
+
             try:
-                # 1. Analizar prompt con parser semántico
-                search_state["status"] = "Analizando prompt..."
+                # ── PASO 0: Parsear prompt y obtener queries ──────────────
                 search_state["progress"] = 5
-                
-                # Usar el parser semántico para obtener requisitos de tecnología
+
                 semantic_parser = SemanticParser()
                 parsed_prompt = semantic_parser.parse(prompt)
                 tech_requirements = get_technology_requirements(parsed_prompt)
-                
-                # Determinar si hay filtros de tecnología
-                has_tech_filters = bool(
-                    tech_requirements.get("must_have") or 
-                    tech_requirements.get("must_not") or
-                    tech_requirements.get("must_have_categories") or
-                    tech_requirements.get("must_not_categories")
-                )
-                
+
                 search_state["progress"] = 10
-                
-                # Usar el intérprete para el análisis completo
+
                 interpreter = GeminiInterpreter()
                 analysis = interpreter.analyze_prompt(prompt)
-                
-                # Añadir requisitos de tecnología al análisis
+
                 if tech_requirements.get("must_have") or tech_requirements.get("must_have_categories"):
                     analysis.required_tools = (
-                        tech_requirements.get("must_have", []) + 
+                        tech_requirements.get("must_have", []) +
                         tech_requirements.get("must_have_categories", [])
                     )
                 if tech_requirements.get("must_not") or tech_requirements.get("must_not_categories"):
                     analysis.excluded_tools = (
-                        tech_requirements.get("must_not", []) + 
+                        tech_requirements.get("must_not", []) +
                         tech_requirements.get("must_not_categories", [])
                     )
-                
+
                 search_state["analysis"] = {
-                    "business_type": analysis.business_type,
-                    "product_category": analysis.product_category,
-                    "service_type": analysis.service_type,
-                    "niche": analysis.niche,
-                    "queries_count": len(analysis.search_queries),
-                    "queries": analysis.search_queries[:5],
-                    "tech_must_have": analysis.required_tools if hasattr(analysis, 'required_tools') else [],
-                    "tech_must_not": analysis.excluded_tools if hasattr(analysis, 'excluded_tools') else []
+                    "business_type":   analysis.business_type,
+                    "product_category":analysis.product_category,
+                    "service_type":    analysis.service_type,
+                    "niche":           analysis.niche,
+                    "queries_count":   len(analysis.search_queries),
+                    "queries":         analysis.search_queries[:5],
+                    "tech_must_have":  analysis.required_tools if hasattr(analysis, 'required_tools') else [],
+                    "tech_must_not":   analysis.excluded_tools if hasattr(analysis, 'excluded_tools') else [],
                 }
-                search_state["progress"] = 25
-                
-                # 2. Buscar webs
-                search_state["status"] = "Buscando webs..."
+                search_state["progress"] = 20
+
+                # ── PASO 1: Obtener candidatos con Serper ─────────────────
+                search_state["status"] = "Buscando webs candidatas..."
                 searcher = SerperSearch()
                 search_results = searcher.search(analysis, max_results=max_results * 3)
-                search_state["progress"] = 45
-                search_state["status"] = f"Encontrados {len(search_results)} resultados"
-                
+                search_state["progress"] = 35
+                search_state["status"] = f"Candidatos obtenidos: {len(search_results)} — Lanzando 3 workers..."
+
                 if not search_results:
                     search_state["status"] = "No se encontraron resultados"
                     search_state["progress"] = 100
                     search_state["is_searching"] = False
                     return
-                
-                # 3. Validación en dos fases
-                search_state["status"] = "Fase 1: Validando tipo de web..."
-                
-                # Fase 1: Validar sin filtro de tecnología (solo tipo de web)
-                validator = DomainValidator(use_wappalyzer=False, use_pagespeed=False)
-                
-                # Dominios que pasan la primera fase
-                phase1_passed = []
-                total = len(search_results)
-                
-                for i, sr in enumerate(search_results):
-                    try:
-                        result = validator.validate(sr, analysis)
-                        if result.analysis_complete and result.confidence_score >= 40:
-                            phase1_passed.append({
-                                "search_result": sr,
-                                "validation_result": result,
-                                "confidence": result.confidence_score
-                            })
-                    except:
-                        pass
-                    
-                    progress = 45 + int((i / total) * 20)
-                    search_state["progress"] = min(progress, 65)
-                    search_state["status"] = f"Fase 1: {i+1}/{total}"
-                
-                search_state["status"] = f"Fase 1 completada: {len(phase1_passed)} candidatos"
-                
-                if not phase1_passed:
+
+                # ── PASO 2: Pipeline autónomo por dominio con 3 workers ───
+                # Cada worker toma un dominio de la cola y ejecuta:
+                #   Fase 1 (validación) → Fase 2 (tech) → Fase 3 (contacto)
+                def on_pipeline_progress(worker_states, completed, total):
+                    # Actualizar estado de cada worker en tiempo real
+                    search_state["workers"] = worker_states
+
+                    # Progreso global: 35-99% durante el pipeline
+                    if total > 0:
+                        pipeline_pct = int((completed / total) * 100)
+                        global_progress = 35 + int(pipeline_pct * 0.64)
+                        search_state["progress"] = min(global_progress, 99)
+
+                    # Construir mensaje de estado con resumen de los 3 workers
+                    active = [
+                        w for w in worker_states
+                        if w["phase"] not in ("idle", "done", "rejected", "error")
+                    ]
+                    if active:
+                        parts = [
+                            f"W{w['worker_id']}: [{w['phase_label']}] {w['domain']}"
+                            for w in active[:3]
+                        ]
+                        search_state["status"] = "  |  ".join(parts)
+                    else:
+                        search_state["status"] = f"Procesando... {completed}/{total}"
+
+                orchestrator = DomainPipelineOrchestrator(
+                    analysis=analysis,
+                    tech_requirements=tech_requirements,
+                    extract_fields=extract_fields if extract_contacts else [],
+                    fast_mode=fast_mode,
+                    max_results=max_results,
+                    on_progress=on_pipeline_progress,
+                )
+
+                final_results = orchestrator.run(search_results)
+
+                if not final_results:
                     search_state["status"] = "No se encontraron webs del tipo solicitado"
                     search_state["progress"] = 100
                     search_state["is_searching"] = False
                     return
-                
-                # Ordenar por confianza
-                phase1_passed.sort(key=lambda x: x["confidence"], reverse=True)
-                
-                # === FASE 2: Verificar tecnologías con 3 WORKERS PARALELOS ===
-                validated_with_tech = []
-                validated_without_tech = []
-                
-                search_state["status"] = "Fase 2: Preparando análisis de tecnologías..."
-                
-                # Preparar lista de dominios para análisis
-                domains_to_analyze = []
-                for item in phase1_passed:
-                    result = item["validation_result"]
-                    
-                    schema_info = {}
-                    if result.schema_data:
-                        schema_info = {
-                            "types": result.schema_data.get("types", [])[:3],
-                            "is_ecommerce": result.schema_data.get("is_ecommerce", False),
-                            "is_service": result.schema_data.get("is_service_business", False),
-                            "has_products": result.schema_data.get("has_products", False),
-                            "product_count": result.schema_data.get("product_count", 0),
-                            "has_reviews": result.schema_data.get("has_reviews", False),
-                            "rating": result.schema_data.get("aggregate_rating")
-                        }
-                    
-                    domain_info = {
-                        "domain": result.domain,
-                        "url": result.url,
-                        "confidence": round(result.confidence_score, 1),
-                        "title": result.page_title[:60] + "..." if len(result.page_title) > 60 else result.page_title,
-                        "reasons": result.validation_reasons[:3],
-                        "tech": [],
-                        "tech_profile": None,
-                        "is_ecommerce": False,
-                        "schema": schema_info,
-                        "tech_match": False
-                    }
-                    domains_to_analyze.append(domain_info)
-                
-                # Si hay filtros de tecnología, analizar con Wappalyzer en PARALELO
-                if has_tech_filters and domains_to_analyze:
-                    search_state["status"] = "Fase 2: Wappalyzer (3 workers paralelos)..."
-                    print(f"[Fase 2] Iniciando análisis PARALELO de {len(domains_to_analyze)} dominios")
-                    
-                    def on_wappalyzer_progress(progress, status, completed, total):
-                        phase2_progress = 65 + int((progress / 100) * 25)
-                        search_state["progress"] = min(phase2_progress, 90)
-                        search_state["status"] = f"Fase 2: {completed}/{total} - 3 workers"
-                    
-                    try:
-                        # Análisis PARALELO con 3 workers
-                        analyzed_domains = analyze_technologies_parallel(
-                            domains_to_analyze,
-                            on_progress=on_wappalyzer_progress
-                        )
-                        
-                        # Clasificar resultados
-                        parallel_wappalyzer = ParallelWappalyzerAnalyzer()
-                        must_have = analysis.required_tools if hasattr(analysis, 'required_tools') else []
-                        must_not = analysis.excluded_tools if hasattr(analysis, 'excluded_tools') else []
-                        
-                        for domain_info in analyzed_domains:
-                            validated_without_tech.append(domain_info.copy())
-                            
-                            if parallel_wappalyzer.check_tech_requirements(domain_info, must_have, must_not):
-                                domain_info["tech_match"] = True
-                                validated_with_tech.append(domain_info)
-                        
-                        print(f"[Fase 2] Análisis PARALELO completado: {len(validated_with_tech)} cumplen requisitos")
-                        
-                    except Exception as e:
-                        print(f"[Fase 2] ERROR en análisis paralelo: {str(e)}")
-                        validated_without_tech = domains_to_analyze
-                else:
-                    # Sin filtros de tecnología, usar lista directamente
-                    validated_without_tech = domains_to_analyze
-                    search_state["progress"] = 90
-                
-                # === Determinar resultados finales ===
-                final_results = []
-                if has_tech_filters:
-                    if len(validated_with_tech) > 0:
-                        validated_with_tech.sort(key=lambda x: x["confidence"], reverse=True)
-                        final_results = validated_with_tech[:max_results]
-                        search_state["status"] = f"✓ {len(final_results)} dominios con tecnología requerida"
-                    else:
-                        validated_without_tech.sort(key=lambda x: x["confidence"], reverse=True)
-                        final_results = validated_without_tech[:max_results]
-                        search_state["status"] = f"⚠️ {len(final_results)} dominios (sin filtro de tecnología)"
-                else:
-                    validated_without_tech.sort(key=lambda x: x["confidence"], reverse=True)
-                    final_results = validated_without_tech[:max_results]
-                    search_state["status"] = f"✓ {len(final_results)} dominios encontrados"
-                
-                search_state["progress"] = 90
-                
-                # === FASE 3: EXTRACCIÓN DE CONTACTOS - 3 WORKERS ===
-                if extract_contacts and final_results and extract_fields:
-                    fields_msg = ", ".join(extract_fields).replace("social", "RRSS")
-                    if fast_mode:
-                        mode_label = "⚡ Modo Rápido (Katana, 15s/dominio)"
-                    else:
-                        mode_label = "⚡ Katana + 🔍 Playwright"
-                    search_state["status"] = f"Fase 3: {mode_label} ({fields_msg})..."
-                    print(f"[Fase 3] Iniciando extracción para {len(final_results)} dominios")
-                    print(f"[Fase 3] Modo: {'Rápido (solo Katana, 15s)' if fast_mode else 'Preciso (Katana → Playwright)'}")
-                    
-                    def on_hybrid_progress(progress, status, completed, total):
-                        """Callback para progreso híbrido."""
-                        phase3_progress = 90 + int((progress / 100) * 10)
-                        search_state["progress"] = min(phase3_progress, 99)
-                        search_state["status"] = f"Fase 3: {status} ({completed}/{total})"
-                    
-                    try:
-                        final_results = extract_contacts_hybrid(
-                            final_results,
-                            fields=extract_fields,
-                            on_progress=on_hybrid_progress,
-                            fast_mode=fast_mode
-                        )
-                        
-                        # Añadir fields_requested y contar estadísticas
-                        katana_count = 0
-                        playwright_count = 0
-                        for domain_info in final_results:
-                            if domain_info.get("contact"):
-                                domain_info["contact"]["fields_requested"] = extract_fields
-                                method = domain_info["contact"].get("extraction_method", "")
-                                if method == "katana":
-                                    katana_count += 1
-                                elif method in ["playwright", "both"]:
-                                    playwright_count += 1
-                        
-                        print(f"[Fase 3] ✓ Completado: {katana_count} Katana (⚡), {playwright_count} Playwright (🔍)")
-                        
-                    except Exception as e:
-                        print(f"[Fase 3] ERROR en extracción híbrida: {str(e)}")
-                        for domain_info in final_results:
-                            if not domain_info.get("contact"):
-                                domain_info["contact"] = {
-                                    "email": None, "phone": None,
-                                    "all_emails": [], "all_phones": [],
-                                    "social_media": [], "extraction_success": False,
-                                    "extraction_method": "error", "source": str(e)[:50],
-                                    "fields_requested": extract_fields
-                                }
-                else:
-                    for domain_info in final_results:
-                        domain_info["contact"] = None
-                
+
                 search_state["results"] = final_results
                 search_state["status"] = f"✓ Completado: {len(final_results)} dominios encontrados"
                 search_state["progress"] = 100
-                
+
             except Exception as e:
                 search_state["status"] = f"Error: {str(e)}"
                 search_state["progress"] = 100
             finally:
                 search_state["is_searching"] = False
-        
+                # Resetear workers a idle al terminar
+                search_state["workers"] = [
+                    {"worker_id": i + 1, "phase": "idle", "phase_label": "En espera", "domain": "", "detail": ""}
+                    for i in range(NUM_WORKERS)
+                ]
+
         thread = threading.Thread(target=run_search)
         thread.start()
         
@@ -465,11 +327,12 @@ def create_app():
     def status():
         """Endpoint para obtener estado de la búsqueda."""
         return jsonify({
-            "is_searching": search_state["is_searching"],
-            "progress": search_state["progress"],
-            "status": search_state["status"],
+            "is_searching":  search_state["is_searching"],
+            "progress":      search_state["progress"],
+            "status":        search_state["status"],
             "results_count": len(search_state["results"]),
-            "analysis": search_state["analysis"]
+            "analysis":      search_state["analysis"],
+            "workers":       search_state.get("workers", []),
         })
     
     @app.route('/api/results')
