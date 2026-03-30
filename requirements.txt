@@ -1,7 +1,12 @@
 # Web Search & Analysis
 requests>=2.31.0
 beautifulsoup4>=4.12.0
+lxml>=4.9.0
 # Note: wappalyzergo binary is used for tech detection (via subprocess)
+
+# Domain Intelligence (Sales Triggers)
+python-whois>=0.8.0
+dnspython>=2.4.0
 
 # Browser Automation (Contact Extraction)
 playwright>=1.40.0

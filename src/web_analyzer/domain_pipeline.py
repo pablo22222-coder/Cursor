@@ -26,6 +26,7 @@ from src.web_analyzer.parallel_wappalyzer import (
     WAPPALYZER_TIMEOUT,
 )
 from src.web_analyzer.hybrid_extractor import HybridContactExtractor
+from src.web_analyzer.sales_triggers import analyze_sales_triggers
 from src.utils.resource_throttle import ResourceThrottle
 
 # Número máximo de workers (el throttle puede reducirlo dinámicamente)
@@ -36,6 +37,7 @@ PHASE_LABELS = {
     "idle":       "En espera",
     "phase1":     "Fase 1 · Validando",
     "phase2":     "Fase 2 · Tecnologías",
+    "phase2b":    "Fase 2b · Sales Triggers",
     "phase3":     "Fase 3 · Extrayendo contacto",
     "done":       "Completado",
     "rejected":   "Descartado",
@@ -352,6 +354,19 @@ class DomainPipelineOrchestrator:
 
             except Exception as e:
                 domain_info["analysis_notes"].append(f"Wappalyzer no disponible: {str(e)[:40]}")
+
+        # ── FASE 2b: Sales Triggers (ligero, sin Playwright) ─────────
+        state.update("phase2b", domain, "Extrayendo disparadores de venta...")
+        self._notify_progress()
+
+        try:
+            st = analyze_sales_triggers(
+                domain_info["url"],
+                tech_profile=domain_info.get("tech_profile"),
+            )
+            domain_info["sales_triggers"] = st
+        except Exception as e:
+            domain_info["sales_triggers"] = {"error": str(e)[:80], "alerts": []}
 
         # ── FASE 3: Extracción de contacto (resiliente) ───────────────
         if self.extract_fields:
