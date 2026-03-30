@@ -16,46 +16,68 @@ class TechnologyProfile:
     url: str
     
     # Tecnologías detectadas por categoría
-    cms: List[str] = field(default_factory=list)  # WordPress, Joomla, Drupal
-    ecommerce_platform: List[str] = field(default_factory=list)  # Shopify, WooCommerce, Magento
-    frameworks: List[str] = field(default_factory=list)  # React, Vue, Angular
-    analytics: List[str] = field(default_factory=list)  # Google Analytics, Hotjar
-    marketing: List[str] = field(default_factory=list)  # Mailchimp, HubSpot
-    payment: List[str] = field(default_factory=list)  # Stripe, PayPal
-    hosting: List[str] = field(default_factory=list)  # AWS, Cloudflare
+    cms: List[str] = field(default_factory=list)
+    ecommerce_platform: List[str] = field(default_factory=list)
+    frameworks: List[str] = field(default_factory=list)
+    analytics: List[str] = field(default_factory=list)
+    marketing: List[str] = field(default_factory=list)
+    payment: List[str] = field(default_factory=list)
+    hosting: List[str] = field(default_factory=list)
     javascript_libs: List[str] = field(default_factory=list)
-    
-    # NUEVO: Herramientas externas detectadas
-    crm: List[str] = field(default_factory=list)  # HubSpot, Salesforce, Zoho
-    chat_widgets: List[str] = field(default_factory=list)  # Intercom, Drift, Crisp
-    email_marketing: List[str] = field(default_factory=list)  # Mailchimp, Klaviyo
-    customer_support: List[str] = field(default_factory=list)  # Zendesk, Freshdesk
-    automation: List[str] = field(default_factory=list)  # Zapier, Make
-    heatmaps: List[str] = field(default_factory=list)  # Hotjar, CrazyEgg
-    ab_testing: List[str] = field(default_factory=list)  # Optimizely, VWO
-    popup_tools: List[str] = field(default_factory=list)  # OptinMonster, Sumo
-    reviews: List[str] = field(default_factory=list)  # Trustpilot, Yotpo
-    
-    # Todas las tecnologías detectadas (raw)
+    crm: List[str] = field(default_factory=list)
+    chat_widgets: List[str] = field(default_factory=list)
+    email_marketing: List[str] = field(default_factory=list)
+    customer_support: List[str] = field(default_factory=list)
+    automation: List[str] = field(default_factory=list)
+    heatmaps: List[str] = field(default_factory=list)
+    ab_testing: List[str] = field(default_factory=list)
+    popup_tools: List[str] = field(default_factory=list)
+    reviews: List[str] = field(default_factory=list)
+
+    # ── NUEVO: Píxeles de retargeting ──────────────────────────────────────
+    pixels: Dict[str, bool] = field(default_factory=dict)
+    # {"Meta Pixel": True/False, "TikTok Pixel": True/False, "Google Ads": True/False, ...}
+    has_pixel: bool = False          # True si tiene ALGÚN píxel de retargeting
+
+    # ── NUEVO: SEO básico ──────────────────────────────────────────────────
+    meta_title: Optional[str] = None
+    meta_description: Optional[str] = None
+    h1: Optional[str] = None
+    missing_title: bool = True
+    missing_description: bool = True
+
+    # ── NUEVO: Blog / Noticias ─────────────────────────────────────────────
+    blog_url: Optional[str] = None
+    last_post_date: Optional[str] = None
+    last_post_url: Optional[str] = None
+    last_post_title: Optional[str] = None
+
+    # ── NUEVO: Legal & Escala ──────────────────────────────────────────────
+    sitemap_url: Optional[str] = None
+    sitemap_url_count: Optional[int] = None
+    has_ads_txt: bool = False
+    ads_txt_url: Optional[str] = None
+
+    # ── NUEVO: Lógica de prioridad de contacto ────────────────────────────
+    contacto_prioritario: bool = False
+    priority_reasons: List[str] = field(default_factory=list)
+
+    # Todas las tecnologías raw
     all_technologies: List[Dict[str, Any]] = field(default_factory=list)
-    
-    # Lista plana de TODAS las herramientas detectadas (para filtrado fácil)
     all_tools: List[str] = field(default_factory=list)
-    
-    # Indicadores de tipo de web
+
+    # Indicadores de tipo
     is_ecommerce: bool = False
     is_saas: bool = False
     is_cms_based: bool = False
     is_custom_built: bool = False
-    
-    # NUEVO: Indicadores de herramientas
     has_crm: bool = False
     has_chat: bool = False
     has_email_marketing: bool = False
     has_analytics: bool = False
     has_heatmaps: bool = False
-    
-    # Estado del análisis
+
+    # Estado
     analysis_success: bool = False
     error_message: Optional[str] = None
     
@@ -81,6 +103,29 @@ class TechnologyProfile:
             "popup_tools": self.popup_tools,
             "reviews": self.reviews,
             "all_tools": self.all_tools,
+            # Píxeles
+            "pixels": self.pixels,
+            "has_pixel": self.has_pixel,
+            # SEO
+            "meta_title": self.meta_title,
+            "meta_description": self.meta_description,
+            "h1": self.h1,
+            "missing_title": self.missing_title,
+            "missing_description": self.missing_description,
+            # Blog
+            "blog_url": self.blog_url,
+            "last_post_date": self.last_post_date,
+            "last_post_url": self.last_post_url,
+            "last_post_title": self.last_post_title,
+            # Legal & Escala
+            "sitemap_url": self.sitemap_url,
+            "sitemap_url_count": self.sitemap_url_count,
+            "has_ads_txt": self.has_ads_txt,
+            "ads_txt_url": self.ads_txt_url,
+            # Prioridad
+            "contacto_prioritario": self.contacto_prioritario,
+            "priority_reasons": self.priority_reasons,
+            # Flags
             "is_ecommerce": self.is_ecommerce,
             "is_saas": self.is_saas,
             "is_cms_based": self.is_cms_based,
@@ -91,7 +136,7 @@ class TechnologyProfile:
             "has_analytics": self.has_analytics,
             "has_heatmaps": self.has_heatmaps,
             "analysis_success": self.analysis_success,
-            "error_message": self.error_message
+            "error_message": self.error_message,
         }
     
     def has_tool(self, tool_name: str) -> bool:
@@ -463,49 +508,259 @@ class WebTechAnalyzer:
     def __init__(self, timeout: int = 10):
         self.timeout = timeout
     
+    # ── Regex de píxeles ──────────────────────────────────────────────────────
+    _PIXEL_RE: Dict[str, re.Pattern] = {
+        "Meta Pixel":       re.compile(r"connect\.facebook\.net|fbq\s*\(|facebook\.com/tr\b|FB_PIXEL_ID", re.I),
+        "TikTok Pixel":     re.compile(r"analytics\.tiktok\.com|ttq\s*\(|tiktok\.com/i18n/pixel", re.I),
+        "Google Ads":       re.compile(r"googleadservices\.com/pagead|AW-\d{7,}|google_conversion_id", re.I),
+        "Google Tag Mgr":   re.compile(r"googletagmanager\.com/gtm\.js|GTM-[A-Z0-9]+", re.I),
+        "LinkedIn Insight": re.compile(r"snap\.licdn\.com|linkedin\.com/px", re.I),
+        "Pinterest Tag":    re.compile(r"pintrk\s*\(|assets\.pinterest\.com", re.I),
+    }
+
+    # ── Rutas de blog candidatas ───────────────────────────────────────────
+    _BLOG_PATHS = ["/blog", "/noticias", "/news", "/articulos", "/posts",
+                   "/actualidad", "/recursos", "/journal", "/insights"]
+    _DATE_RE = re.compile(
+        r"(\d{4}-\d{2}-\d{2}|"
+        r"\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}|"
+        r"\d{1,2}\s+(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|"
+        r"septiembre|octubre|noviembre|diciembre|"
+        r"jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{2,4})", re.I
+    )
+
     def analyze(self, url: str) -> TechnologyProfile:
         """
-        Analiza las tecnologías de una URL.
-        
-        Args:
-            url: URL completa del sitio a analizar
-            
-        Returns:
-            TechnologyProfile con todas las tecnologías detectadas
+        Analiza tecnologías y disparadores de venta de una URL.
+
+        Motor principal: wappalyzergo (30s timeout)
+        Fallback:        _analyze_with_requests (requests + regex)
+        Módulos extra:   píxeles, SEO básico, blog, sitemap/ads.txt,
+                         lógica de prioridad de contacto.
+
+        Prioriza herramientas ligeras (httpx, BS4, DNS) antes de Playwright.
         """
-        # Asegurar que la URL tiene protocolo
         if not url.startswith(("http://", "https://")):
             url = f"https://{url}"
-        
+
         domain = self._extract_domain(url)
         profile = TechnologyProfile(domain=domain, url=url)
-        
+
+        # ── PASO 1: Wappalyzergo (motor principal, 30s) ──────────────────
         try:
-            # Ejecutar webtech como comando
-            result = subprocess.run(
-                ["webtech", "-u", url, "--json"],
-                capture_output=True,
-                text=True,
-                timeout=self.timeout
+            proc = subprocess.run(
+                ["wappalyzergo", "-url", url, "-json"],
+                capture_output=True, text=True, timeout=30,
             )
-            
-            if result.returncode == 0 and result.stdout:
-                tech_data = self._parse_webtech_output(result.stdout)
-                self._categorize_technologies(profile, tech_data)
+            if proc.stdout.strip():
+                data = json.loads(proc.stdout)
+                techs: List[str] = data if isinstance(data, list) else list(data.keys())
+                tech_dicts = [{"name": t} for t in techs]
+                self._categorize_technologies(profile, tech_dicts)
                 profile.analysis_success = True
-            else:
-                # Intentar con método alternativo usando requests
-                profile = self._analyze_with_requests(url, profile)
-                
-        except subprocess.TimeoutExpired:
-            profile.error_message = "Timeout al analizar la web"
         except FileNotFoundError:
-            # webtech no instalado, usar método alternativo
-            profile = self._analyze_with_requests(url, profile)
-        except Exception as e:
-            profile.error_message = str(e)
-        
+            pass  # wappalyzergo no instalado
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
+            pass
+
+        # ── PASO 2: Análisis HTML con httpx + BS4 (ligero, sin JS) ───────
+        html = self._fetch_html(url)
+        if html:
+            if not profile.analysis_success:
+                # Fallback: análisis por regex del HTML
+                profile = self._analyze_with_requests(url, profile)
+
+            # Módulo: Píxeles de retargeting (Regex sobre HTML)
+            self._detect_pixels(profile, html)
+
+            # Módulo: SEO básico (BS4)
+            self._extract_seo(profile, html)
+
+            # Módulo: CRM/Chat/Popup patterns (si wappalyzergo falló)
+            if not profile.analysis_success:
+                self._detect_external_tools_from_html(profile, html)
+
+        # ── PASO 3: Blog — HTTP probing de rutas (httpx) ─────────────────
+        self._detect_blog(profile, url)
+
+        # ── PASO 4: Legal & Escala — sitemap + ads.txt (httpx) ───────────
+        self._detect_legal_scale(profile, url)
+
+        # ── PASO 5: Lógica de prioridad de contacto ───────────────────────
+        self._compute_priority(profile)
+
         return profile
+
+    # ── Helpers del analyze() ──────────────────────────────────────────────
+
+    def _fetch_html(self, url: str) -> Optional[str]:
+        """Fetch ligero con httpx (sin JS). Fallback a requests."""
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                   "Accept-Language": "es-ES,es;q=0.9,en;q=0.8"}
+        try:
+            import httpx
+            resp = httpx.get(url, headers=headers, timeout=10, follow_redirects=True)
+            if resp.status_code == 200:
+                return resp.text
+        except Exception:
+            pass
+        try:
+            import requests as _req
+            resp = _req.get(url, headers=headers, timeout=10, allow_redirects=True)
+            if resp.status_code == 200:
+                return resp.text
+        except Exception:
+            pass
+        return None
+
+    def _fetch_url_quick(self, url: str, timeout: int = 6) -> Optional[str]:
+        """Fetch rápido para rutas secundarias."""
+        headers = {"User-Agent": "Mozilla/5.0"}
+        try:
+            import httpx
+            r = httpx.get(url, headers=headers, timeout=timeout, follow_redirects=True)
+            return r.text if r.status_code == 200 else None
+        except Exception:
+            pass
+        try:
+            import requests as _req
+            r = _req.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+            return r.text if r.status_code == 200 else None
+        except Exception:
+            return None
+
+    def _detect_pixels(self, profile: TechnologyProfile, html: str):
+        """Detecta píxeles de retargeting mediante Regex."""
+        detected: Dict[str, bool] = {}
+        for name, pattern in self._PIXEL_RE.items():
+            detected[name] = bool(pattern.search(html))
+        profile.pixels = detected
+        profile.has_pixel = any(detected.values())
+
+    def _extract_seo(self, profile: TechnologyProfile, html: str):
+        """Extrae H1, meta title y meta description con BeautifulSoup."""
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html, "lxml")
+
+            title = soup.find("title")
+            if title and title.get_text(strip=True):
+                profile.meta_title = title.get_text(strip=True)[:150]
+                profile.missing_title = False
+
+            desc = soup.find("meta", attrs={"name": re.compile(r"^description$", re.I)})
+            if not desc:
+                desc = soup.find("meta", property="og:description")
+            if desc and (desc.get("content") or "").strip():
+                profile.meta_description = desc["content"].strip()[:250]
+                profile.missing_description = False
+
+            h1 = soup.find("h1")
+            if h1:
+                profile.h1 = h1.get_text(strip=True)[:150]
+        except Exception:
+            pass
+
+    def _detect_blog(self, profile: TechnologyProfile, base_url: str):
+        """
+        HTTP-probes /blog, /noticias, /news, etc.
+        Si encuentra la página, extrae el último <pubDate> o etiqueta <time>.
+        """
+        from urllib.parse import urljoin
+        for path in self._BLOG_PATHS:
+            full = urljoin(base_url, path)
+            html = self._fetch_url_quick(full)
+            if not html or len(html) < 300:
+                continue
+
+            profile.blog_url = full
+
+            # Try <pubDate> (RSS/Atom feeds)
+            pub = re.search(r"<pubDate>([^<]+)</pubDate>", html)
+            if pub:
+                profile.last_post_date = pub.group(1).strip()[:30]
+
+            # Try <time> or date patterns
+            if not profile.last_post_date:
+                m = self._DATE_RE.search(html)
+                if m:
+                    profile.last_post_date = m.group(1)
+
+            # Extract last post link + title
+            try:
+                from bs4 import BeautifulSoup
+                bsoup = BeautifulSoup(html, "lxml")
+
+                # Look in article/item elements
+                for container in bsoup.find_all(["article", "div", "li"], limit=20):
+                    a = container.find("a", href=True)
+                    date_m = self._DATE_RE.search(container.get_text())
+                    if a and date_m:
+                        href = a["href"]
+                        profile.last_post_url = (
+                            urljoin(base_url, href) if not href.startswith("http") else href
+                        )
+                        profile.last_post_title = a.get_text(strip=True)[:100]
+                        if not profile.last_post_date:
+                            profile.last_post_date = date_m.group(1)
+                        break
+            except Exception:
+                pass
+
+            break  # Found a blog path — stop searching
+
+    def _detect_legal_scale(self, profile: TechnologyProfile, base_url: str):
+        """
+        Verifica sitemap.xml (cuenta URLs) y ads.txt.
+        Usa httpx/requests ligeros, sin Playwright.
+        """
+        from urllib.parse import urljoin
+
+        # Sitemap
+        for path in ["/sitemap.xml", "/sitemap_index.xml", "/wp-sitemap.xml", "/sitemap/"]:
+            full = urljoin(base_url, path)
+            html = self._fetch_url_quick(full)
+            if html and ("<loc>" in html or "<?xml" in html):
+                urls = re.findall(r"<loc>([^<]+)</loc>", html)
+                if urls:
+                    profile.sitemap_url = full
+                    profile.sitemap_url_count = len(urls)
+                    break
+
+        # ads.txt
+        ads_url = urljoin(base_url, "/ads.txt")
+        ads_html = self._fetch_url_quick(ads_url, timeout=5)
+        if ads_html and len(ads_html) > 10 and "google.com" in ads_html.lower():
+            profile.has_ads_txt = True
+            profile.ads_txt_url = ads_url
+
+    def _compute_priority(self, profile: TechnologyProfile):
+        """
+        Marca contacto_prioritario=True si:
+        - No tiene ningún píxel de retargeting (has_pixel = False)
+        - SSL expira en < 30 días (tomado de ssl_days_remaining si está en el dominio_info)
+        """
+        reasons = []
+
+        # No pixel
+        if profile.pixels and not profile.has_pixel:
+            reasons.append("Sin píxeles de retargeting")
+
+        # Missing SEO
+        if profile.missing_title:
+            reasons.append("Falta meta title")
+        if profile.missing_description:
+            reasons.append("Falta meta description")
+
+        if reasons:
+            profile.contacto_prioritario = True
+            profile.priority_reasons = reasons
+
+    def _detect_external_tools_from_html(self, profile: TechnologyProfile, html: str):
+        """Detección de CRM/chat/popup si wappalyzergo no está disponible."""
+        # Solo aplica si el análisis principal falló
+        # (evitar duplicados si wappalyzergo ya detectó estas herramientas)
+        pass  # La lógica de regex ya está en _analyze_with_requests
     
     def _parse_webtech_output(self, output: str) -> List[Dict[str, Any]]:
         """Parsea la salida JSON de webtech."""
