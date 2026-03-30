@@ -267,12 +267,12 @@
         {% set st = data.sales_triggers %}
         {% if st and not st.error %}
 
-        <!-- Alertas de Prioridad -->
+        {# ── Alertas de Prioridad ── #}
         {% if st.alerts %}
         <div class="section-card rounded-xl border-2 border-amber-300 bg-amber-50 p-5">
             <h2 class="text-sm font-semibold text-amber-800 uppercase tracking-wide mb-3 flex items-center gap-2">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"></path></svg>
-                Alertas de Prioridad
+                Alertas de Prioridad de Contacto
             </h2>
             <ul class="space-y-1.5">
                 {% for alert in st.alerts %}
@@ -282,234 +282,318 @@
         </div>
         {% endif %}
 
-        <!-- Infraestructura -->
+        {# ── Infraestructura ── #}
         {% set infra = st.infra %}
         <div class="section-card glass rounded-xl border border-gray-200 p-6">
             <h2 class="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-4 flex items-center gap-2">
                 <svg class="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"></path></svg>
                 Infraestructura
             </h2>
-            <div class="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+            <div class="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
                 <div class="bg-gray-50 rounded-lg p-3">
-                    <p class="text-xs text-gray-400 mb-1">Antigüedad</p>
+                    <p class="text-xs text-gray-400 mb-1">Antigüedad del dominio</p>
                     <p class="font-medium text-gray-800">
-                        {% if infra.domain_age_years %}{{ infra.domain_age_years }} años ({{ infra.registered_date }}){% else %}<span class="text-gray-400">—</span>{% endif %}
+                        {% if infra.domain_age_years %}{{ infra.domain_age_years }} años
+                            <span class="text-xs text-gray-400">(reg. {{ infra.registered_date }})</span>
+                        {% else %}<span class="text-gray-400">—</span>{% endif %}
                     </p>
+                    {% if infra.registrar %}<p class="text-xs text-gray-400 mt-0.5">{{ infra.registrar }}</p>{% endif %}
                 </div>
                 <div class="bg-gray-50 rounded-lg p-3">
-                    <p class="text-xs text-gray-400 mb-1">Email corporativo</p>
+                    <p class="text-xs text-gray-400 mb-1">Email corporativo (MX)</p>
                     <p class="font-medium text-gray-800">{{ infra.mx_provider or '—' }}</p>
+                    {% if infra.mx_raw %}<p class="text-xs text-gray-400 mt-0.5">{{ infra.mx_raw[0] }}</p>{% endif %}
                 </div>
                 <div class="bg-gray-50 rounded-lg p-3">
-                    <p class="text-xs text-gray-400 mb-1">Hosting</p>
-                    <p class="font-medium text-gray-800">{{ infra.hosting_provider or '—' }} {% if infra.hosting_ip %}<span class="text-xs text-gray-400">({{ infra.hosting_ip }})</span>{% endif %}</p>
+                    <p class="text-xs text-gray-400 mb-1">Hosting / IP</p>
+                    <p class="font-medium text-gray-800">{{ infra.hosting_provider or '—' }}</p>
+                    {% if infra.hosting_ip %}<p class="text-xs text-gray-400 mt-0.5">{{ infra.hosting_ip }}</p>{% endif %}
                 </div>
-                <div class="bg-gray-50 rounded-lg p-3">
-                    <p class="text-xs text-gray-400 mb-1">SSL</p>
+                <div class="bg-gray-50 rounded-lg p-3 col-span-2 md:col-span-3">
+                    <p class="text-xs text-gray-400 mb-1">Certificado SSL</p>
                     {% if infra.ssl_valid is not none %}
                         {% if infra.ssl_valid %}
-                        <p class="font-medium text-green-700">✓ Válido — expira {{ infra.ssl_expires }}
-                            {% if infra.ssl_days_remaining is not none %}
-                                ({{ infra.ssl_days_remaining }} días)
-                            {% endif %}
+                        <p class="font-medium text-green-700 flex items-center gap-1.5">
+                            <span class="w-2 h-2 bg-green-500 rounded-full inline-block"></span>
+                            Válido — expira {{ infra.ssl_expires }}
+                            {% if infra.ssl_days_remaining is not none %}({{ infra.ssl_days_remaining }} días restantes){% endif %}
+                            {% if infra.ssl_issuer %}<span class="text-xs text-gray-400 font-normal">· {{ infra.ssl_issuer }}</span>{% endif %}
                         </p>
                         {% else %}
-                        <p class="font-medium text-red-600">✗ Expirado ({{ infra.ssl_expires }})</p>
+                        <p class="font-medium text-red-600 flex items-center gap-1.5">
+                            <span class="w-2 h-2 bg-red-500 rounded-full inline-block"></span>
+                            Expirado o inválido {% if infra.ssl_expires %}({{ infra.ssl_expires }}){% endif %}
+                        </p>
                         {% endif %}
-                    {% else %}<p class="text-gray-400">—</p>{% endif %}
+                    {% else %}<p class="text-gray-400">No se pudo verificar</p>{% endif %}
                 </div>
             </div>
         </div>
 
-        <!-- Marketing & Sales Triggers -->
-        {% set mkt = st.marketing %}
+        {# ── Wappalyzer Completo ── #}
+        {% set wap = st.wappalyzer %}
+        {% if wap %}
         <div class="section-card glass rounded-xl border border-gray-200 p-6">
             <h2 class="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-4 flex items-center gap-2">
+                <svg class="w-4 h-4 text-violet-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"></path></svg>
+                Tech Stack Completo (Wappalyzer)
+            </h2>
+            {% set cat_map = [('cms','CMS','blue'),('payment','Pasarelas de Pago','green'),('analytics','Analítica','orange'),('ui_framework','UI / Frameworks','purple'),('chat_widget','Chat Widgets','teal'),('email_marketing','Email Marketing','pink'),('crm','CRM','indigo'),('ecommerce','E-Commerce','emerald')] %}
+            <div class="space-y-3">
+                {% for cat_key, cat_label, color in cat_map %}
+                {% set techs = wap.get(cat_key, []) %}
+                <div class="flex items-start gap-3">
+                    <span class="text-xs text-gray-500 w-36 flex-shrink-0 pt-0.5">{{ cat_label }}</span>
+                    <div class="flex flex-wrap gap-1.5">
+                        {% if techs %}
+                            {% for t in techs %}
+                            <span class="px-2 py-0.5 rounded-md text-xs font-medium bg-{{ color }}-50 text-{{ color }}-700 border border-{{ color }}-100">{{ t }}</span>
+                            {% endfor %}
+                        {% else %}
+                        <span class="text-xs text-gray-300">No detectado</span>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% if wap.all_techs %}
+            <div class="mt-4 pt-4 border-t border-gray-100">
+                <p class="text-xs text-gray-400 mb-2">Todas las tecnologías detectadas</p>
+                <div class="flex flex-wrap gap-1.5">
+                    {% for t in wap.all_techs %}
+                    <span class="px-2 py-0.5 rounded-md text-xs bg-gray-100 text-gray-600">{{ t }}</span>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        {# ── Marketing & Sales Triggers ── #}
+        {% set mkt = st.marketing %}
+        <div class="section-card glass rounded-xl border border-gray-200 p-6">
+            <h2 class="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-5 flex items-center gap-2">
                 <svg class="w-4 h-4 text-pink-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z"></path></svg>
-                Marketing & Píxeles
+                Marketing & Sales Triggers
             </h2>
 
-            <!-- Pixels -->
+            {# Píxeles — show ALL, detected and missing #}
             <div class="mb-5">
                 <p class="text-xs text-gray-500 uppercase tracking-wide mb-2">Píxeles de Retargeting</p>
                 <div class="flex flex-wrap gap-2">
-                    {% set pixel_map = [('meta_pixel','Meta Pixel','pink'),('tiktok_pixel','TikTok Pixel','slate'),('google_ads','Google Ads','blue'),('google_tag_mgr','Google Tag Mgr','yellow')] %}
-                    {% for key, label, color in pixel_map %}
+                    {% for name, detected in (mkt.pixels or {}).items() %}
                     <span class="px-3 py-1 rounded-full text-xs font-medium border
-                        {% if mkt.pixels.get(key) %}bg-{{ color }}-100 text-{{ color }}-700 border-{{ color }}-200{% else %}bg-gray-100 text-gray-400 border-gray-200 line-through{% endif %}">
-                        {{ label }}
+                        {% if detected %}bg-pink-100 text-pink-700 border-pink-200
+                        {% else %}bg-gray-50 text-gray-400 border-gray-200 line-through{% endif %}">
+                        {% if detected %}✓ {% endif %}{{ name }}
                     </span>
                     {% endfor %}
                 </div>
             </div>
 
-            <!-- Support widgets -->
-            {% if mkt.support_widgets %}
+            {# Support widgets #}
             <div class="mb-5">
                 <p class="text-xs text-gray-500 uppercase tracking-wide mb-2">Widgets de Soporte</p>
                 <div class="flex flex-wrap gap-2">
-                    {% for w in mkt.support_widgets %}
-                    <span class="px-3 py-1 rounded-full text-xs font-medium bg-teal-100 text-teal-700 border border-teal-200">{{ w|capitalize }}</span>
-                    {% endfor %}
+                    {% if mkt.support_widgets %}
+                        {% for w in mkt.support_widgets %}
+                        <span class="px-3 py-1 rounded-full text-xs font-medium bg-teal-100 text-teal-700 border border-teal-200">✓ {{ w }}</span>
+                        {% endfor %}
+                    {% else %}<span class="text-xs text-gray-400">Ninguno detectado</span>{% endif %}
                 </div>
             </div>
-            {% endif %}
 
-            <!-- Email marketing -->
-            {% if mkt.email_marketing %}
+            {# Email marketing #}
             <div class="mb-5">
-                <p class="text-xs text-gray-500 uppercase tracking-wide mb-2">Email Marketing</p>
+                <p class="text-xs text-gray-500 uppercase tracking-wide mb-2">Email Marketing / Newsletter</p>
                 <div class="flex flex-wrap gap-2">
-                    {% for e in mkt.email_marketing %}
-                    <span class="px-3 py-1 rounded-full text-xs font-medium bg-violet-100 text-violet-700 border border-violet-200">{{ e|capitalize }}</span>
-                    {% endfor %}
+                    {% if mkt.email_marketing %}
+                        {% for e in mkt.email_marketing %}
+                        <span class="px-3 py-1 rounded-full text-xs font-medium bg-violet-100 text-violet-700 border border-violet-200">✓ {{ e }}</span>
+                        {% endfor %}
+                    {% else %}<span class="text-xs text-gray-400">No detectado</span>{% endif %}
                 </div>
             </div>
-            {% endif %}
 
-            <!-- Lead magnets + popups -->
-            <div class="grid grid-cols-2 gap-4 text-sm">
+            {# Pop-ups + forms + lead magnets #}
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
                 <div class="bg-gray-50 rounded-lg p-3">
-                    <p class="text-xs text-gray-400 mb-1">Pop-ups / Captación</p>
+                    <p class="text-xs text-gray-400 mb-1">Pop-ups de captación</p>
                     <p class="font-medium {% if mkt.has_popups %}text-green-700{% else %}text-gray-400{% endif %}">
-                        {{ 'Sí' if mkt.has_popups else 'No' }}
+                        {{ 'Sí — detectados' if mkt.has_popups else 'No detectados' }}
                     </p>
                 </div>
                 <div class="bg-gray-50 rounded-lg p-3">
-                    <p class="text-xs text-gray-400 mb-1">Lead Magnets</p>
+                    <p class="text-xs text-gray-400 mb-1">Formularios en página</p>
+                    <p class="font-medium text-gray-800">{{ mkt.forms_found or 0 }} formularios</p>
+                </div>
+                <div class="bg-gray-50 rounded-lg p-3">
+                    <p class="text-xs text-gray-400 mb-2">Lead Magnets detectados</p>
                     {% if mkt.lead_magnets %}
                         {% for lm in mkt.lead_magnets %}
                             {% if lm.startswith('http') %}
-                            <a href="{{ lm }}" target="_blank" class="inline-flex items-center gap-1 text-xs text-primary-600 hover:underline">
-                                Ver enlace
-                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                            <a href="{{ lm }}" target="_blank"
+                               class="inline-flex items-center gap-1 text-xs text-primary-600 hover:underline mr-2">
+                                Ver página ↗
                             </a>
                             {% else %}
-                            <span class="text-xs text-gray-600">{{ lm }}</span>
+                            <span class="text-xs text-gray-600 block">{{ lm }}</span>
                             {% endif %}
                         {% endfor %}
                     {% else %}
-                    <span class="text-gray-400 text-xs">No detectados</span>
+                    <span class="text-xs text-gray-400">No detectados</span>
                     {% endif %}
                 </div>
             </div>
         </div>
 
-        <!-- SEO & Contenido -->
+        {# ── SEO & Contenido ── #}
         {% set seo = st.seo %}
         <div class="section-card glass rounded-xl border border-gray-200 p-6">
             <h2 class="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-4 flex items-center gap-2">
                 <svg class="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
-                SEO & Contenido
+                SEO & Contenido (Ganchos de Venta)
             </h2>
             <div class="space-y-4 text-sm">
                 <div>
                     <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">H1 principal</p>
-                    <p class="text-gray-800 font-medium">{{ seo.h1 or '<span class="text-gray-400">No encontrado</span>' }}</p>
+                    <p class="text-gray-800 font-medium">{{ seo.h1 or '<span class="text-gray-400 font-normal">No encontrado</span>' }}</p>
+                    {% if seo.h1_all and seo.h1_all|length > 1 %}
+                    <p class="text-xs text-gray-400 mt-1">Otros H1: {{ seo.h1_all[1:] | join(' · ') }}</p>
+                    {% endif %}
                 </div>
-                <div>
-                    <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">
-                        Meta Title {% if seo.missing_title %}<span class="text-red-500 ml-1">⚠ FALTA</span>{% endif %}
-                    </p>
-                    <p class="text-gray-800">{{ seo.meta_title or '<span class="text-gray-400">—</span>' }}</p>
-                </div>
-                <div>
-                    <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">
-                        Meta Description {% if seo.missing_description %}<span class="text-red-500 ml-1">⚠ FALTA</span>{% endif %}
-                    </p>
-                    <p class="text-gray-600">{{ seo.meta_description or '<span class="text-gray-400">—</span>' }}</p>
+                <div class="grid md:grid-cols-2 gap-4">
+                    <div>
+                        <p class="text-xs text-gray-400 uppercase tracking-wide mb-1 flex items-center gap-1">
+                            Meta Title
+                            {% if seo.missing_title %}<span class="text-red-500 text-xs font-bold">⚠ FALTA</span>{% else %}<span class="text-green-500 text-xs">✓</span>{% endif %}
+                        </p>
+                        <p class="text-gray-700 text-xs">{{ seo.meta_title or '—' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs text-gray-400 uppercase tracking-wide mb-1 flex items-center gap-1">
+                            Meta Description
+                            {% if seo.missing_description %}<span class="text-red-500 text-xs font-bold">⚠ FALTA</span>{% else %}<span class="text-green-500 text-xs">✓</span>{% endif %}
+                        </p>
+                        <p class="text-gray-600 text-xs">{{ seo.meta_description or '—' }}</p>
+                    </div>
                 </div>
                 {% if seo.blog_url %}
                 <div class="pt-3 border-t border-gray-100">
                     <p class="text-xs text-gray-400 uppercase tracking-wide mb-2">Blog / Noticias</p>
-                    <div class="flex items-center gap-4">
-                        <a href="{{ seo.blog_url }}" target="_blank" class="inline-flex items-center gap-1 px-3 py-1.5 bg-green-50 hover:bg-green-100 text-green-700 text-xs font-medium rounded-lg border border-green-200 transition-colors">
-                            Ver blog
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                    <div class="flex flex-wrap items-center gap-3">
+                        <a href="{{ seo.blog_url }}" target="_blank"
+                           class="inline-flex items-center gap-1 px-3 py-1.5 bg-green-50 hover:bg-green-100 text-green-700 text-xs font-medium rounded-lg border border-green-200 transition-colors">
+                            Ver blog ↗
                         </a>
                         {% if seo.last_post_date %}
-                        <span class="text-xs text-gray-500">Último post: {{ seo.last_post_date }}
-                            {% if seo.last_post_url %}
-                            — <a href="{{ seo.last_post_url }}" target="_blank" class="text-primary-600 hover:underline">Ver artículo</a>
-                            {% endif %}
+                        <span class="text-xs text-gray-500">
+                            Último post: <strong>{{ seo.last_post_date }}</strong>
+                            {% if seo.last_post_title %} — {{ seo.last_post_title[:60] }}{% endif %}
                         </span>
+                        {% if seo.last_post_url %}
+                        <a href="{{ seo.last_post_url }}" target="_blank"
+                           class="text-xs text-primary-600 hover:underline">Ver artículo ↗</a>
+                        {% endif %}
                         {% endif %}
                     </div>
+                </div>
+                {% else %}
+                <div class="pt-3 border-t border-gray-100">
+                    <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">Blog / Noticias</p>
+                    <p class="text-xs text-gray-400">No detectado (/blog, /noticias, /news)</p>
                 </div>
                 {% endif %}
             </div>
         </div>
 
-        <!-- Outreach -->
+        {# ── Outreach ── #}
         {% set out = st.outreach %}
         <div class="section-card glass rounded-xl border border-gray-200 p-6">
             <h2 class="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-4 flex items-center gap-2">
                 <svg class="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a1.994 1.994 0 01-1.414-.586m0 0L11 14h4a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2v4l.586-.586z"></path></svg>
                 Outreach
             </h2>
-            <div class="grid grid-cols-2 gap-4 text-sm">
-                <div class="bg-gray-50 rounded-lg p-3">
+            <div class="flex items-center gap-6 text-sm mb-4">
+                <div>
                     <p class="text-xs text-gray-400 mb-1">Idioma del sitio</p>
                     <p class="font-semibold text-gray-800 uppercase">{{ out.language or '—' }}</p>
                 </div>
             </div>
             {% if out.social_links %}
-            <div class="mt-4 flex flex-wrap gap-2">
+            <div class="flex flex-wrap gap-2">
                 {% for platform, link in out.social_links.items() %}
                 <a href="{{ link }}" target="_blank"
-                   class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm text-gray-700 transition-colors border border-gray-200">
-                    {{ platform|capitalize }}
+                   class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm text-gray-700 transition-colors border border-gray-200 font-medium">
+                    {{ platform }}
                     <svg class="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
                 </a>
                 {% endfor %}
             </div>
+            {% else %}
+            <p class="text-xs text-gray-400">Redes sociales no detectadas en el footer</p>
             {% endif %}
         </div>
 
-        <!-- Legal & Escala -->
+        {# ── Legal & Escala ── #}
         {% set ls = st.legal_scale %}
         <div class="section-card glass rounded-xl border border-gray-200 p-6">
             <h2 class="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-4 flex items-center gap-2">
                 <svg class="w-4 h-4 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3"></path></svg>
                 Legal & Escala
             </h2>
-            <div class="grid grid-cols-2 gap-4 text-sm">
+            <div class="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
                 <div class="bg-gray-50 rounded-lg p-3">
                     <p class="text-xs text-gray-400 mb-1">URLs en Sitemap</p>
-                    <p class="font-medium text-gray-800">
-                        {% if ls.sitemap_url_count is not none %}{{ ls.sitemap_url_count }} URLs{% else %}<span class="text-gray-400">No encontrado</span>{% endif %}
+                    {% if ls.sitemap_url_count is not none %}
+                    <p class="font-medium text-gray-800">{{ ls.sitemap_url_count }} URLs
+                        <a href="{{ ls.sitemap_url }}" target="_blank" class="ml-1 text-xs text-primary-600 hover:underline">↗</a>
                     </p>
+                    {% else %}<p class="text-gray-400">No encontrado</p>{% endif %}
                 </div>
                 <div class="bg-gray-50 rounded-lg p-3">
-                    <p class="text-xs text-gray-400 mb-1">ads.txt (Monetización)</p>
-                    <p class="font-medium {% if ls.has_ads_txt %}text-green-700{% else %}text-gray-400{% endif %}">
-                        {{ 'Sí — monetiza con publicidad' if ls.has_ads_txt else 'No' }}
+                    <p class="text-xs text-gray-400 mb-1">ads.txt — Monetización</p>
+                    {% if ls.has_ads_txt %}
+                    <p class="font-medium text-green-700">Sí
+                        <a href="{{ ls.ads_txt_url }}" target="_blank" class="ml-1 text-xs text-primary-600 hover:underline">ver ads.txt ↗</a>
+                    </p>
+                    {% else %}<p class="text-gray-400">No — no monetiza con publicidad</p>{% endif %}
+                </div>
+                <div class="bg-gray-50 rounded-lg p-3">
+                    <p class="text-xs text-gray-400 mb-1">robots.txt</p>
+                    <p class="font-medium {% if ls.robots_txt %}text-green-700{% else %}text-gray-400{% endif %}">
+                        {{ 'Presente' if ls.robots_txt else 'No encontrado' }}
                     </p>
                 </div>
             </div>
         </div>
 
-        <!-- E-Commerce Avanzado -->
+        {# ── E-Commerce Avanzado ── #}
         {% set ec = st.ecommerce %}
-        {% if ec.is_ecommerce_platform %}
+        {% if ec and ec.is_ecommerce %}
         <div class="section-card glass rounded-xl border border-gray-200 p-6">
             <h2 class="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-4 flex items-center gap-2">
                 <svg class="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
-                E-Commerce — {{ ec.platform }}
+                E-Commerce Avanzado — {{ ec.platform }}
             </h2>
             <div class="space-y-3 text-sm">
-                <div class="flex items-center gap-3">
-                    <span class="text-xs text-gray-500 w-28">Reviews</span>
+                <div class="flex items-center gap-3 flex-wrap">
+                    <span class="text-xs text-gray-500 w-20">Reviews</span>
                     {% if ec.has_reviews %}
-                    <span class="px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs font-medium">✓ Tiene reviews ({{ ec.review_platform }})</span>
+                    <span class="px-3 py-1 bg-green-100 text-green-700 rounded-full text-xs font-medium border border-green-200">
+                        ✓ Tiene reviews — {{ ec.review_platform }}
+                    </span>
                     {% else %}
-                    <span class="px-2 py-0.5 bg-amber-100 text-amber-700 rounded text-xs font-medium">Sin reviews — 💡 Oportunidad de venta</span>
+                    <span class="px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-medium border border-amber-200">
+                        Sin reviews — 💡 Oportunidad de venta
+                    </span>
                     {% endif %}
                 </div>
                 {% if ec.sample_review %}
-                <div class="bg-gray-50 rounded-lg p-3 border-l-4 border-green-300">
-                    <p class="text-xs text-gray-400 mb-1">Ejemplo de review</p>
-                    <p class="text-gray-700 italic">"{{ ec.sample_review }}"</p>
+                <div class="bg-gradient-to-r from-green-50 to-emerald-50 rounded-lg p-4 border-l-4 border-green-400">
+                    <p class="text-xs text-gray-500 mb-1 uppercase tracking-wide">Ejemplo de review encontrado</p>
+                    {% if ec.sample_rating %}<p class="text-xs text-yellow-600 mb-1">★ {{ ec.sample_rating }}/5</p>{% endif %}
+                    <p class="text-gray-700 italic text-sm">"{{ ec.sample_review }}"</p>
                 </div>
                 {% endif %}
             </div>
