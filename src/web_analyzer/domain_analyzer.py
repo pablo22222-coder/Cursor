@@ -1,6 +1,19 @@
 """
-DomainAnalyzer - Análisis técnico completo de dominios
-Combina Wappalyzer para tecnologías y Playwright para contactos/metadatos.
+DomainAnalyzer - Auditoría técnica completa + Sales Triggers de un dominio.
+
+Este módulo es el motor del modo "Analizar a fondo" (inspect).
+Ejecuta en orden:
+  1. HTTP status + redirects (requests.head)
+  2. SSL certificate (socket + ssl)
+  3. Wappalyzer (subprocess, 30s timeout)
+  4. Playwright: metadata, contactos, páginas
+  5. Sales Triggers: WHOIS, DNS/MX, píxeles, lead magnets,
+     pop-ups, H1, meta-tags, blog, RRSS, idioma, sitemap, ads.txt,
+     e-commerce reviews, alertas de prioridad.
+
+El buscador de dominios (domain_pipeline.py) NO ejecuta Sales Triggers
+— sólo valida, detecta tech y extrae contacto. Cada auditoría profunda
+se lanza desde el endpoint /inspect/<domain>.
 """
 import asyncio
 import re
@@ -26,46 +39,50 @@ class DomainAnalysis:
     domain: str
     url: str
     success: bool = False
-    
+
     # HTTP Info
     http_status: Optional[int] = None
     final_url: Optional[str] = None
     redirects: List[Dict[str, Any]] = field(default_factory=list)
-    
+
     # SSL
     ssl: Optional[Dict[str, Any]] = None
-    
+
     # Metadata
     metadata: Dict[str, Any] = field(default_factory=dict)
     language: Optional[str] = None
-    
+
     # Technologies (Wappalyzer)
     technologies: List[str] = field(default_factory=list)
-    
+
     # Contact
     contact: Dict[str, Any] = field(default_factory=dict)
-    
+
     # Pages
     pages: List[Dict[str, str]] = field(default_factory=list)
-    
+
+    # Sales Triggers (deep audit — populated by analyze_sales_triggers)
+    sales_triggers: Optional[Dict[str, Any]] = None
+
     # Error
     error: Optional[str] = None
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "domain": self.domain,
-            "url": self.url,
-            "success": self.success,
-            "http_status": self.http_status,
-            "final_url": self.final_url,
-            "redirects": self.redirects,
-            "ssl": self.ssl,
-            "metadata": self.metadata,
-            "language": self.language,
-            "technologies": self.technologies,
-            "contact": self.contact,
-            "pages": self.pages,
-            "error": self.error
+            "domain":        self.domain,
+            "url":           self.url,
+            "success":       self.success,
+            "http_status":   self.http_status,
+            "final_url":     self.final_url,
+            "redirects":     self.redirects,
+            "ssl":           self.ssl,
+            "metadata":      self.metadata,
+            "language":      self.language,
+            "technologies":  self.technologies,
+            "contact":       self.contact,
+            "pages":         self.pages,
+            "sales_triggers":self.sales_triggers,
+            "error":         self.error,
         }
 
 
@@ -78,7 +95,7 @@ class DomainAnalyzer:
     - SSL: certificado
     """
     
-    WAPPALYZER_TIMEOUT = 10  # seconds per domain
+    WAPPALYZER_TIMEOUT = 30  # seconds per domain (deep audit)
     
     # Contact patterns
     EMAIL_REGEX = re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', re.IGNORECASE)
@@ -112,7 +129,17 @@ class DomainAnalyzer:
         self._browser = None
     
     async def analyze_domain(self, domain: str) -> DomainAnalysis:
-        """Análisis completo de un dominio."""
+        """
+        Auditoría completa de un dominio (modo 'Analizar a fondo').
+
+        Fases:
+          1. HTTP Status & Redirects
+          2. SSL Certificate
+          3. Wappalyzer (30s timeout)
+          4. Playwright: metadata, contacts, pages
+          5. Sales Triggers: WHOIS, DNS/MX, píxeles, SEO, blog, RRSS,
+             sitemap, ads.txt, e-commerce reviews, alertas de prioridad
+        """
         if not domain.startswith(('http://', 'https://')):
             url = f'https://{domain}'
         else:
@@ -120,24 +147,38 @@ class DomainAnalyzer:
             domain = urlparse(url).netloc
             if domain.startswith('www.'):
                 domain = domain[4:]
-        
+
         result = DomainAnalysis(domain=domain, url=url)
-        
+
         try:
             # 1. HTTP Status & Redirects
             await self._check_http(result)
-            
+
             # 2. SSL Certificate
             await self._check_ssl(result)
-            
-            # 3. Wappalyzer (10s timeout)
+
+            # 3. Wappalyzer (30s timeout — upgraded from 10s)
             await self._analyze_technologies(result)
-            
+
             # 4. Playwright: metadata, contacts, pages
             await self._analyze_with_playwright(result)
-            
+
+            # 5. Sales Triggers deep audit (WHOIS, DNS, píxeles, SEO, blog…)
+            try:
+                from src.web_analyzer.sales_triggers import analyze_sales_triggers
+                # Build tech_profile from wappalyzer data for reuse
+                tech_profile = None
+                if result.technologies:
+                    tech_profile = {"all_techs": result.technologies}
+                result.sales_triggers = analyze_sales_triggers(
+                    result.final_url or result.url,
+                    tech_profile=tech_profile,
+                )
+            except Exception as st_err:
+                result.sales_triggers = {"error": str(st_err)[:120], "alerts": []}
+
             result.success = True
-            
+
         except Exception as e:
             result.error = str(e)
             result.success = False

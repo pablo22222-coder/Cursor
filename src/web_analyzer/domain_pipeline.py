@@ -26,7 +26,7 @@ from src.web_analyzer.parallel_wappalyzer import (
     WAPPALYZER_TIMEOUT,
 )
 from src.web_analyzer.hybrid_extractor import HybridContactExtractor
-from src.web_analyzer.sales_triggers import analyze_sales_triggers
+# sales_triggers removed from pipeline — runs in domain_analyzer (deep audit mode)
 from src.utils.resource_throttle import ResourceThrottle
 
 # Número máximo de workers (el throttle puede reducirlo dinámicamente)
@@ -37,7 +37,6 @@ PHASE_LABELS = {
     "idle":       "En espera",
     "phase1":     "Fase 1 · Validando",
     "phase2":     "Fase 2 · Tecnologías",
-    "phase2b":    "Fase 2b · Sales Triggers",
     "phase3":     "Fase 3 · Extrayendo contacto",
     "done":       "Completado",
     "rejected":   "Descartado",
@@ -281,7 +280,7 @@ class DomainPipelineOrchestrator:
                 validation_notes.append(f"Análisis incompleto: {validation.error_message[:60]}")
                 print(f"[Pipeline] ⚠ {domain} — análisis incompleto (score={score:.0f}): {validation.error_message[:80]}")
             else:
-                print(f"[Pipeline] {'✓' if score >= 40 else '~'} {domain} — score={score:.0f}")
+                print(f"[Pipeline] {'✓' if score >= 60 else '~'} {domain} — score={score:.0f}")
         except Exception as e:
             validation_notes.append(f"Error en validación: {str(e)[:60]}")
             print(f"[Pipeline] ⚠ {domain} — excepción en validación: {e}")
@@ -289,7 +288,15 @@ class DomainPipelineOrchestrator:
             validation = ValidationResult(domain=domain, url=getattr(search_result, 'url', ''))
             validation.page_title = getattr(search_result, 'title', '')
 
-        # Construir domain_info — siempre, independientemente del score
+        # Score filter: discard domains below 60 (fast pipeline, quality over quantity)
+        MIN_RELEVANCE_SCORE = 60
+        if score < MIN_RELEVANCE_SCORE:
+            print(f"[Pipeline] ✗ {domain} — score {score:.0f} < {MIN_RELEVANCE_SCORE}, descartado")
+            state.update("rejected", domain, f"Score bajo ({score:.0f} < {MIN_RELEVANCE_SCORE})")
+            self._mark_completed()
+            return
+
+        # Construir domain_info
         schema_info = {}
         if getattr(validation, 'schema_data', None):
             try:
@@ -354,19 +361,6 @@ class DomainPipelineOrchestrator:
 
             except Exception as e:
                 domain_info["analysis_notes"].append(f"Wappalyzer no disponible: {str(e)[:40]}")
-
-        # ── FASE 2b: Sales Triggers (ligero, sin Playwright) ─────────
-        state.update("phase2b", domain, "Extrayendo disparadores de venta...")
-        self._notify_progress()
-
-        try:
-            st = analyze_sales_triggers(
-                domain_info["url"],
-                tech_profile=domain_info.get("tech_profile"),
-            )
-            domain_info["sales_triggers"] = st
-        except Exception as e:
-            domain_info["sales_triggers"] = {"error": str(e)[:80], "alerts": []}
 
         # ── FASE 3: Extracción de contacto (resiliente) ───────────────
         if self.extract_fields:
