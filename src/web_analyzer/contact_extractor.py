@@ -16,6 +16,17 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Set
 from urllib.parse import urlparse, urljoin
 
+from src.web_analyzer.email_validator import (
+    select_best_email,
+    filter_emails_for_domain,
+    is_basic_email,
+    _domain_matches_site,
+    _email_domain,
+)
+
+# Timeout global para encontrar un email válido por dominio.
+EMAIL_SEARCH_TIMEOUT = 20
+
 try:
     from playwright.async_api import async_playwright, Page, Browser, BrowserContext, TimeoutError as PlaywrightTimeout
     PLAYWRIGHT_AVAILABLE = True
@@ -49,7 +60,10 @@ class ContactData:
     all_emails: List[str] = field(default_factory=list)
     all_phones: List[str] = field(default_factory=list)
     social_media: List[Dict[str, str]] = field(default_factory=list)
-    
+
+    # Candidatos crudos detectados por EMAIL_REGEX (pre-validación).
+    email_candidates: List[str] = field(default_factory=list)
+
     extraction_success: bool = False
     source: str = ""
     pages_visited: List[str] = field(default_factory=list)
@@ -257,78 +271,91 @@ class ContactExtractor:
             await self._init_browser()
             page = await self._create_stealth_page()
             page.set_default_timeout(self.timeout * 1000)
-            
-            # === PASO 1: HOME ===
-            try:
-                await page.goto(url, wait_until='domcontentloaded', timeout=15000)
-                contact.pages_visited.append(url)
-                
+
+            async def _do_extraction():
+                # === PASO 1: HOME ===
                 try:
-                    contact.title = await page.title()
-                except:
-                    pass
-                
-                await self._simulate_human(page)
-                await asyncio.sleep(2)
-                
-                html = await page.content()
-                self._extract_data(html, contact, search_email, search_phone, search_social)
-                
-                if contact.has_any_data():
-                    sources.append("home")
-                
-            except Exception as e:
-                contact.error_message = f"Error en home: {str(e)[:50]}"
-            
-            # === PASO 2: NAVEGACIÓN EN CASCADA ===
-            # Solo continuar si no tenemos todos los datos solicitados
-            if not contact.has_all_requested(fields):
-                for path in self.CONTACT_PATHS:
-                    if contact.has_all_requested(fields):
-                        break
-                    
+                    await page.goto(url, wait_until='domcontentloaded', timeout=15000)
+                    contact.pages_visited.append(url)
+
                     try:
-                        contact_url = urljoin(url, path)
-                        
-                        if contact_url in contact.pages_visited:
+                        contact.title = await page.title()
+                    except Exception:
+                        pass
+
+                    await self._simulate_human(page)
+                    await asyncio.sleep(2)
+
+                    html = await page.content()
+                    self._extract_data(html, contact, search_email, search_phone, search_social)
+
+                    if contact.has_any_data():
+                        sources.append("home")
+
+                except Exception as e:
+                    contact.error_message = f"Error en home: {str(e)[:50]}"
+
+                # === PASO 2: NAVEGACIÓN EN CASCADA ===
+                if not contact.has_all_requested(fields):
+                    for path in self.CONTACT_PATHS:
+                        if contact.has_all_requested(fields):
+                            break
+                        try:
+                            contact_url = urljoin(url, path)
+                            if contact_url in contact.pages_visited:
+                                continue
+                            response = await page.goto(
+                                contact_url,
+                                wait_until='domcontentloaded',
+                                timeout=10000
+                            )
+                            if response and response.ok:
+                                contact.pages_visited.append(contact_url)
+                                await self._simulate_human(page)
+                                await asyncio.sleep(1)
+                                html = await page.content()
+                                found_new = self._extract_data(
+                                    html, contact, search_email, search_phone, search_social
+                                )
+                                if found_new:
+                                    sources.append(path.strip('/'))
+                        except Exception:
                             continue
-                        
-                        response = await page.goto(
-                            contact_url, 
-                            wait_until='domcontentloaded', 
-                            timeout=10000
-                        )
-                        
-                        if response and response.ok:
-                            contact.pages_visited.append(contact_url)
-                            
-                            await self._simulate_human(page)
-                            await asyncio.sleep(1)
-                            
-                            html = await page.content()
-                            found_new = self._extract_data(html, contact, search_email, search_phone, search_social)
-                            
-                            if found_new:
-                                sources.append(path.strip('/'))
-                                
-                    except:
-                        continue
-            
+
+            if search_email:
+                try:
+                    await asyncio.wait_for(_do_extraction(), timeout=EMAIL_SEARCH_TIMEOUT)
+                except asyncio.TimeoutError:
+                    pass
+            else:
+                await _do_extraction()
+
             try:
                 await page.close()
-            except:
+            except Exception:
                 pass
-                
+
         except ImportError as e:
             contact.error_message = str(e)
         except Exception as e:
             contact.error_message = f"Error: {str(e)[:100]}"
         finally:
             await self._close_browser()
-        
+
+        # === Selección final del email con las reglas del validador ===
+        if search_email:
+            final_email = select_best_email(contact.email_candidates, contact.domain)
+            contact.email = final_email
+            contact.all_emails = filter_emails_for_domain(
+                contact.email_candidates, contact.domain
+            )
+        else:
+            contact.email = None
+            contact.all_emails = []
+
         contact.source = " + ".join(sources) if sources else "none"
         contact.extraction_success = contact.has_any_data()
-        
+
         return contact
     
     def _extract_data(self, html: str, contact: ContactData, 
@@ -338,24 +365,29 @@ class ContactExtractor:
         
         # === EMAIL ===
         if search_email and not contact.email:
+            site_domain = contact.domain or ''
+
+            def _add_candidate(raw_email: str):
+                nonlocal found_new
+                if not raw_email or not is_basic_email(raw_email):
+                    return
+                candidate = raw_email.lower()
+                if candidate not in contact.email_candidates:
+                    contact.email_candidates.append(candidate)
+                # Early-exit: email del propio dominio → fijamos contact.email
+                if site_domain and not contact.email:
+                    if _domain_matches_site(_email_domain(candidate), site_domain):
+                        contact.email = candidate
+                        found_new = True
+
             for match in self.MAILTO_REGEX.finditer(html):
                 email = match.group(1).strip().lower()
                 email = email.split('?')[0]
-                
-                if self._is_valid_email(email) and email not in contact.all_emails:
-                    contact.all_emails.append(email)
-                    if not contact.email:
-                        contact.email = email
-                        found_new = True
-            
+                _add_candidate(email)
+
             for match in self.EMAIL_REGEX.finditer(html):
                 email = match.group().lower()
-                
-                if self._is_valid_email(email) and email not in contact.all_emails:
-                    contact.all_emails.append(email)
-                    if not contact.email:
-                        contact.email = email
-                        found_new = True
+                _add_candidate(email)
         
         # === TELÉFONO ===
         if search_phone and not contact.phone:
@@ -398,17 +430,9 @@ class ContactExtractor:
         return found_new
     
     def _is_valid_email(self, email: str) -> bool:
-        """Comprobación mínima: todos los emails detectados por EMAIL_REGEX
-        se conservan sin filtrado de calidad adicional."""
-        if not email or '@' not in email:
-            return False
-        try:
-            domain = email.split('@')[1]
-            if '.' not in domain:
-                return False
-        except Exception:
-            return False
-        return True
+        """Comprobación mínima de formato. La validación real se hace al
+        finalizar la extracción con email_validator.select_best_email()."""
+        return is_basic_email(email)
     
     def _is_valid_phone(self, phone: str) -> bool:
         if not phone:
