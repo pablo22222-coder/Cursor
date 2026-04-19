@@ -99,113 +99,6 @@ BLOCKED_THIRD_PARTY_DOMAINS = {
     "prebid.org",
 }
 
-# Emails placeholder a ignorar
-PLACEHOLDER_EMAILS = {
-    'example@domain.com', 'email@example.com', 'your@email.com',
-    'info@example.com', 'contact@example.com', 'name@domain.com',
-    'user@example.com', 'test@test.com', 'admin@example.com'
-}
-
-# Lista negra de dominios técnicos (ampliada)
-BLACKLIST_DOMAINS = {
-    # Servicios técnicos
-    'sentry.io', 'ingest.io', 'amazonaws.com', 'cloudfront.net',
-    'googleusercontent.com', 'gstatic.com', 'cloudflare.com',
-    'herokuapp.com', 'vercel.app', 'netlify.app', 'github.io',
-    'githubusercontent.com', 'gravatar.com', 'wp.com',
-    # Plataformas web
-    'wixpress.com', 'wix.com', 'squarespace.com', 'shopify.com',
-    'myshopify.com', 'webflow.io', 'godaddy.com',
-    # Estándares y schemas
-    'w3.org', 'schema.org', 'json-ld.org', 'ogp.me',
-    # Test y ejemplos
-    'example.com', 'example.org', 'example.net', 'test.com',
-    'test.org', 'localhost', 'domain.com', 'email.com',
-    'yourdomain.com', 'company.com', 'website.com',
-    # Tracking y analytics
-    'analytics.google.com', 'doubleclick.net', 'facebook.com',
-    'fbcdn.net', 'twitter.com', 'linkedin.com'
-}
-
-# Palabras clave para descartar (noreply, notificaciones, etc.)
-BLACKLIST_KEYWORDS = re.compile(
-    r'^(noreply|no-reply|no\.reply|donotreply|do-not-reply|'
-    r'notification|notifications|alert|alerts|'
-    r'mailer|mailer-daemon|postmaster|'
-    r'bounce|bounces|unsubscribe|'
-    r'dev|devops|staging|test|debug|'
-    r'admin-noreply|system|automated|'
-    r'newsletter-noreply|marketing-noreply)@',
-    re.IGNORECASE
-)
-
-# Regex para detectar hashes aleatorios (mezcla sin sentido de letras y números)
-HASH_PATTERN = re.compile(r'^[a-z0-9]{8,}$', re.IGNORECASE)
-RANDOM_CHARS_PATTERN = re.compile(r'[0-9].*[a-z].*[0-9]|[a-z].*[0-9].*[a-z].*[0-9]', re.IGNORECASE)
-
-
-def validate_email_quality(email: str) -> tuple[bool, str]:
-    """
-    Valida la calidad de un email antes de guardarlo.
-    
-    Returns:
-        tuple: (is_valid: bool, reason: str)
-        
-    Filtros aplicados (ultra rápido con Regex):
-    1. Longitud de usuario > 25 chars con patrón hash
-    2. Dominios técnicos en lista negra
-    3. Palabras clave de sistema (noreply, notification, etc.)
-    """
-    if not email or '@' not in email:
-        return False, "invalid_format"
-    
-    email_lower = email.lower().strip()
-    
-    try:
-        user_part, domain_part = email_lower.rsplit('@', 1)
-    except ValueError:
-        return False, "invalid_format"
-    
-    # === FILTRO 1: Longitud + Hash aleatorio ===
-    # Emails con >25 chars O patrón de hash (mezcla aleatoria de letras+números)
-    num_digits = sum(1 for c in user_part if c.isdigit())
-    num_letters = sum(1 for c in user_part if c.isalpha())
-    
-    if len(user_part) > 25:
-        if HASH_PATTERN.match(user_part) or RANDOM_CHARS_PATTERN.search(user_part):
-            if num_digits >= 4:
-                return False, f"hash_username ({len(user_part)} chars)"
-    
-    # Detectar hashes más cortos pero obvios (ej: user1234567890abcdef1234)
-    if len(user_part) > 15 and num_digits >= 6 and num_letters >= 6:
-        # Proporción alta de números mezclados con letras = probable hash
-        if not any(sep in user_part for sep in ['.', '_', '-']):  # Sin separadores normales
-            return False, f"probable_hash ({num_digits} digits, {num_letters} letters)"
-    
-    # === FILTRO 2: Lista negra de dominios técnicos ===
-    if domain_part in BLACKLIST_DOMAINS:
-        return False, f"blacklisted_domain ({domain_part})"
-    
-    # Verificar subdominios (ej: mail.sentry.io)
-    for blacklisted in BLACKLIST_DOMAINS:
-        if domain_part.endswith('.' + blacklisted):
-            return False, f"blacklisted_subdomain ({domain_part})"
-    
-    # === FILTRO 3: Palabras clave de sistema ===
-    if BLACKLIST_KEYWORDS.match(email_lower):
-        return False, f"system_keyword ({user_part})"
-    
-    # === FILTRO 4: Extensiones de archivo (común en scraping) ===
-    if any(email_lower.endswith(ext) for ext in ['.png', '.jpg', '.gif', '.svg', '.js', '.css', '.json']):
-        return False, "file_extension"
-    
-    # === FILTRO 5: Placeholders conocidos ===
-    if email_lower in PLACEHOLDER_EMAILS:
-        return False, "placeholder"
-    
-    return True, "valid"
-
-
 @dataclass
 class HybridResult:
     """Resultado de extracción híbrida."""
@@ -574,18 +467,9 @@ class HybridContactExtractor:
         return found_new
     
     def _is_valid_email(self, email: str) -> bool:
-        """
-        Valida email usando validate_email_quality().
-        Ultra rápido con Regex, sin consumo de RAM.
-        """
-        is_valid, reason = validate_email_quality(email)
-        
-        if not is_valid:
-            # Log para debugging (opcional, comentar en producción)
-            # print(f"[Email] ❌ Descartado: {email} ({reason})")
-            pass
-        
-        return is_valid
+        """Comprobación mínima de formato. Todos los emails detectados por
+        EMAIL_REGEX se conservan sin filtrado de calidad adicional."""
+        return bool(email) and '@' in email
     
     async def _route_handler(self, route, base_domain: str):
         """
