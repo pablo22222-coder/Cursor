@@ -137,17 +137,6 @@ class ContactExtractor:
         'tiktok': re.compile(r'https?://(?:www\.)?tiktok\.com/@[a-zA-Z0-9_.]+/?', re.IGNORECASE),
     }
     
-    EXCLUDED_DOMAINS = {
-        'sentry.io', 'wixpress.com', 'w3.org', 'schema.org',
-        'googleusercontent.com', 'gstatic.com', 'googleapis.com',
-        'cloudflare.com', 'jsdelivr.net', 'unpkg.com', 'cdnjs.com',
-        'gravatar.com', 'wp.com', 'wordpress.org', 'wordpress.com',
-        'example.com', 'example.org', 'test.com', 'localhost'
-    }
-    
-    EXCLUDED_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico', '.pdf'}
-    EXCLUDED_PREFIXES = {'noreply', 'no-reply', 'donotreply', 'mailer-daemon', 'postmaster'}
-    
     CONTACT_PATHS = [
         '/contacto', '/contact', '/contactenos',
         '/aviso-legal', '/legal',
@@ -409,28 +398,16 @@ class ContactExtractor:
         return found_new
     
     def _is_valid_email(self, email: str) -> bool:
+        """Comprobación mínima: todos los emails detectados por EMAIL_REGEX
+        se conservan sin filtrado de calidad adicional."""
         if not email or '@' not in email:
             return False
-        
-        email = email.lower().strip()
-        
-        for ext in self.EXCLUDED_EXTENSIONS:
-            if email.endswith(ext):
-                return False
-        
         try:
             domain = email.split('@')[1]
-            if domain in self.EXCLUDED_DOMAINS:
-                return False
             if '.' not in domain:
                 return False
-        except:
+        except Exception:
             return False
-        
-        prefix = email.split('@')[0]
-        if any(prefix.startswith(excl) for excl in self.EXCLUDED_PREFIXES):
-            return False
-        
         return True
     
     def _is_valid_phone(self, phone: str) -> bool:

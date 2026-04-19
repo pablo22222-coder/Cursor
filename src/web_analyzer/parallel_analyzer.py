@@ -100,8 +100,6 @@ class ParallelDomainAnalyzer:
         'tiktok': re.compile(r'https?://(?:www\.)?tiktok\.com/@[a-zA-Z0-9_.]+/?', re.IGNORECASE),
     }
     
-    EXCLUDED_DOMAINS = {'sentry.io', 'wixpress.com', 'w3.org', 'schema.org', 'example.com'}
-    
     CONTACT_PATHS = ['/contacto', '/contact', '/aviso-legal', '/legal', '/about', '/quienes-somos']
     
     BROWSER_ARGS = [
@@ -455,14 +453,9 @@ class ParallelDomainAnalyzer:
         result.contact = contact
     
     def _is_valid_email(self, email: str) -> bool:
-        if not email or '@' not in email:
-            return False
-        domain = email.split('@')[1]
-        if domain in self.EXCLUDED_DOMAINS:
-            return False
-        if any(email.endswith(ext) for ext in ['.png', '.jpg', '.gif']):
-            return False
-        return True
+        """Comprobación mínima de formato. Conservamos todos los emails
+        detectados por EMAIL_REGEX sin filtrado de calidad adicional."""
+        return bool(email) and '@' in email
     
     async def _find_pages(self, page: Page, result: DomainResult):
         """Find important pages."""

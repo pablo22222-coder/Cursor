@@ -104,9 +104,6 @@ class ParallelContactExtractor:
         'tiktok': re.compile(r'https?://(?:www\.)?tiktok\.com/@[a-zA-Z0-9_.]+/?', re.IGNORECASE),
     }
     
-    EXCLUDED_DOMAINS = {'sentry.io', 'wixpress.com', 'w3.org', 'schema.org', 'example.com'}
-    EXCLUDED_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.svg'}
-    
     CONTACT_PATHS = ['/contacto', '/contact', '/aviso-legal', '/legal', '/about', '/quienes-somos']
     
     def __init__(self, max_workers: int = MAX_WORKERS, on_progress: Callable = None):
@@ -403,14 +400,9 @@ class ParallelContactExtractor:
         return found_new
     
     def _is_valid_email(self, email: str) -> bool:
-        if not email or '@' not in email:
-            return False
-        domain = email.split('@')[1]
-        if domain in self.EXCLUDED_DOMAINS:
-            return False
-        if any(email.endswith(ext) for ext in self.EXCLUDED_EXTENSIONS):
-            return False
-        return True
+        """Comprobación mínima de formato. Conservamos todos los emails
+        detectados por EMAIL_REGEX sin filtrado de calidad adicional."""
+        return bool(email) and '@' in email
 
 
 def extract_contacts_parallel(
