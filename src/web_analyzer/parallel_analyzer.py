@@ -18,6 +18,14 @@ from typing import List, Dict, Any, Optional, Callable
 from urllib.parse import urlparse, urljoin
 import aiohttp
 
+from src.web_analyzer.email_validator import (
+    select_best_email,
+    filter_emails_for_domain,
+    is_basic_email,
+    _domain_matches_site,
+    _email_domain,
+)
+
 try:
     from playwright.async_api import async_playwright, Page, Browser
     PLAYWRIGHT_AVAILABLE = True
@@ -29,6 +37,9 @@ MAX_WORKERS = 3
 MAX_DOMAINS = 30
 WAPPALYZER_TIMEOUT = 10
 PAGE_TIMEOUT = 15000
+# Timeout global para encontrar un email válido por dominio. Si se agota,
+# se deja el campo email vacío (pero se devuelven el resto de datos).
+EMAIL_SEARCH_TIMEOUT = 20
 
 
 @dataclass
@@ -199,9 +210,27 @@ class ParallelDomainAnalyzer:
         except Exception as e:
             result.error = str(e)[:100]
             result.success = False
-        
+
+        # Selección final del email con las reglas del validador:
+        #   1. Dominio igual al del sitio → ganador.
+        #   2. Proveedor genérico (gmail/outlook/...) + filtros anti-basura.
+        #   3. Cualquier otro dominio → descartado.
+        self._finalize_emails(result)
+
         result.processing_time = time.time() - start_time
         return result
+
+    def _finalize_emails(self, result: DomainResult):
+        """Aplica el email_validator sobre los candidatos capturados."""
+        contact = result.contact or {}
+        candidates = contact.get('_email_candidates', []) or []
+        site_domain = result.domain or ''
+        final_email = select_best_email(candidates, site_domain)
+        contact['email'] = final_email
+        contact['all_emails'] = filter_emails_for_domain(candidates, site_domain)
+        # Limpiar estructura interna
+        contact.pop('_email_candidates', None)
+        result.contact = contact
     
     async def _check_http_async(self, result: DomainResult):
         """Check HTTP status asíncronamente."""
@@ -316,40 +345,51 @@ class ParallelDomainAnalyzer:
                 else route.continue_()
             ))
             
-            # === TRIPLE SALTO ===
-            
-            # 1. HOME
+            # === TRIPLE SALTO con timeout global de 20s para el email ===
+
+            async def _triple_jump():
+                # 1. HOME
+                try:
+                    await page.goto(result.url, wait_until='domcontentloaded', timeout=PAGE_TIMEOUT)
+
+                    # Metadata
+                    result.metadata = await self._extract_metadata(page)
+                    result.language = await self._detect_language(page)
+
+                    # Contacts
+                    html = await page.content()
+                    self._extract_contacts(html, result)
+
+                    # Important pages
+                    await self._find_pages(page, result)
+
+                except Exception:
+                    pass
+
+                # 2. CONTACT PAGES (si aún no tenemos email del propio dominio)
+                if not result.contact.get('email'):
+                    for path in self.CONTACT_PATHS[:3]:
+                        try:
+                            contact_url = urljoin(result.url, path)
+                            response = await page.goto(
+                                contact_url, wait_until='domcontentloaded', timeout=8000
+                            )
+                            if response and response.ok:
+                                html = await page.content()
+                                self._extract_contacts(html, result)
+                                if result.contact.get('email'):
+                                    break
+                        except Exception:
+                            continue
+
             try:
-                await page.goto(result.url, wait_until='domcontentloaded', timeout=PAGE_TIMEOUT)
-                
-                # Metadata
-                result.metadata = await self._extract_metadata(page)
-                result.language = await self._detect_language(page)
-                
-                # Contacts
-                html = await page.content()
-                self._extract_contacts(html, result)
-                
-                # Important pages
-                await self._find_pages(page, result)
-                
-            except Exception:
+                await asyncio.wait_for(_triple_jump(), timeout=EMAIL_SEARCH_TIMEOUT)
+            except asyncio.TimeoutError:
+                # Si se agota el timeout, seguimos adelante con lo que haya.
+                # La selección final del email aplicará los filtros sobre los
+                # candidatos ya recolectados.
                 pass
-            
-            # 2. CONTACT PAGES (si no tenemos email)
-            if not result.contact.get('email'):
-                for path in self.CONTACT_PATHS[:3]:  # Primeros 3
-                    try:
-                        contact_url = urljoin(result.url, path)
-                        response = await page.goto(contact_url, wait_until='domcontentloaded', timeout=8000)
-                        if response and response.ok:
-                            html = await page.content()
-                            self._extract_contacts(html, result)
-                            if result.contact.get('email'):
-                                break
-                    except:
-                        continue
-            
+
             await context.close()
             
         except Exception as e:
@@ -401,27 +441,33 @@ class ParallelDomainAnalyzer:
     def _extract_contacts(self, html: str, result: DomainResult):
         """Extract contact information."""
         contact = result.contact
-        
-        # Emails
+        site_domain = result.domain or ''
+
+        # Candidatos crudos — todos los matches del regex. La validación final
+        # se hace al terminar el triple-salto con email_validator.
+        if '_email_candidates' not in contact:
+            contact['_email_candidates'] = []
+        candidates: List[str] = contact['_email_candidates']
+
+        def _add_candidate(raw_email: str):
+            if not raw_email or not is_basic_email(raw_email):
+                return
+            candidate = raw_email.lower()
+            if candidate not in candidates:
+                candidates.append(candidate)
+            # Early-exit: si encontramos un email del propio dominio, lo fijamos
+            # como email actual para parar la búsqueda en más páginas.
+            if site_domain and not contact.get('email'):
+                if _domain_matches_site(_email_domain(candidate), site_domain):
+                    contact['email'] = candidate
+
         for match in self.MAILTO_REGEX.finditer(html):
             email = match.group(1).strip().lower().split('?')[0]
-            if self._is_valid_email(email):
-                if 'email' not in contact:
-                    contact['email'] = email
-                if 'all_emails' not in contact:
-                    contact['all_emails'] = []
-                if email not in contact['all_emails']:
-                    contact['all_emails'].append(email)
-        
+            _add_candidate(email)
+
         for match in self.EMAIL_REGEX.finditer(html):
             email = match.group().lower()
-            if self._is_valid_email(email):
-                if 'email' not in contact:
-                    contact['email'] = email
-                if 'all_emails' not in contact:
-                    contact['all_emails'] = []
-                if email not in contact['all_emails']:
-                    contact['all_emails'].append(email)
+            _add_candidate(email)
         
         # Phones
         for match in self.TEL_REGEX.finditer(html):
@@ -453,9 +499,9 @@ class ParallelDomainAnalyzer:
         result.contact = contact
     
     def _is_valid_email(self, email: str) -> bool:
-        """Comprobación mínima de formato. Conservamos todos los emails
-        detectados por EMAIL_REGEX sin filtrado de calidad adicional."""
-        return bool(email) and '@' in email
+        """Comprobación mínima de formato. La validación real se hace al
+        finalizar el análisis con email_validator.select_best_email()."""
+        return is_basic_email(email)
     
     async def _find_pages(self, page: Page, result: DomainResult):
         """Find important pages."""

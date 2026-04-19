@@ -29,6 +29,16 @@ from urllib.parse import urlparse, urljoin
 from concurrent.futures import ThreadPoolExecutor
 from bs4 import BeautifulSoup
 
+from src.web_analyzer.email_validator import (
+    select_best_email,
+    filter_emails_for_domain,
+    is_basic_email,
+    passes_generic_provider_filters,
+    GENERIC_EMAIL_PROVIDERS,
+    _domain_matches_site,
+    _email_domain,
+)
+
 try:
     from playwright.async_api import async_playwright, Page, BrowserContext
     PLAYWRIGHT_AVAILABLE = True
@@ -42,6 +52,10 @@ KATANA_FAST_TIMEOUT = 15  # seconds - modo rápido (timeout total por dominio)
 PLAYWRIGHT_TIMEOUT = 15000  # ms
 # Timeout por pestaña individual dentro del worker (más ajustado)
 TAB_TIMEOUT = 10000  # ms
+# Timeout GLOBAL para la fase de búsqueda de email válido por dominio.
+# Si en 20s no se consigue un email que supere la validación (dominio propio
+# o proveedor genérico limpio), se deja el campo email en blanco.
+EMAIL_SEARCH_TIMEOUT = 20  # seconds
 
 CHROME_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 
@@ -110,7 +124,14 @@ class HybridResult:
     all_emails: List[str] = field(default_factory=list)
     all_phones: List[str] = field(default_factory=list)
     social_media: List[Dict[str, str]] = field(default_factory=list)
-    
+
+    # Conjunto de candidatos crudos capturados por EMAIL_REGEX antes de filtrar.
+    # Se usa internamente para elegir el "mejor" email vía email_validator.
+    email_candidates: List[str] = field(default_factory=list)
+    # True si hemos encontrado un email del propio dominio del sitio
+    # (permite early-exit: ya no hace falta buscar más).
+    site_domain_email_found: bool = False
+
     extraction_method: str = "none"  # katana, playwright, or both
     katana_found: bool = False
     playwright_used: bool = False
@@ -122,7 +143,7 @@ class HybridResult:
         return {
             "email": self.email,
             "phone": self.phone,
-            "all_emails": self.all_emails,
+            "all_emails": list(self.all_emails),
             "all_phones": self.all_phones,
             "social_media": self.social_media,
             "extraction_success": self.success,
@@ -258,50 +279,90 @@ class HybridContactExtractor:
         search_phone = 'phone' in fields
         search_social = 'social' in fields
 
-        if self.fast_mode:
-            # === MODO RÁPIDO: solo Katana con timeout máximo de 15s ===
-            try:
-                katana_success = await asyncio.wait_for(
-                    self._try_katana(result, url, search_email, search_phone, search_social),
-                    timeout=KATANA_FAST_TIMEOUT
-                )
-            except asyncio.TimeoutError:
-                katana_success = False
-                print(f"[Fast] ⏱ {domain} → timeout ({KATANA_FAST_TIMEOUT}s), sin resultados")
-
-            if result.email or result.phone:
-                result.extraction_method = "katana"
-                result.katana_found = True
-                result.success = True
-                self.katana_hits += 1
-                print(f"[Fast] ⚡ {domain} -> {result.email}")
-            else:
-                result.extraction_method = "none"
-                print(f"[Fast] ❌ {domain} -> Sin resultados")
-        else:
-            # === MODO PRECISO: Katana (7s) → Playwright fallback ===
-            katana_success = await self._try_katana(result, url, search_email, search_phone, search_social)
-
-            if katana_success and result.email:
-                result.extraction_method = "katana"
-                result.katana_found = True
-                result.success = True
-                self.katana_hits += 1
-                print(f"[Katana] ⚡ {domain} -> {result.email} (SKIP Playwright)")
-            else:
-                # === PLAYWRIGHT (Fallback profundo) ===
-                result.playwright_used = True
-                self.playwright_fallbacks += 1
-
-                await self._try_playwright(result, url, search_email, search_phone, search_social)
+        async def _run_extraction():
+            if self.fast_mode:
+                # === MODO RÁPIDO: solo Katana con timeout máximo de 15s ===
+                try:
+                    await asyncio.wait_for(
+                        self._try_katana(result, url, search_email, search_phone, search_social),
+                        timeout=KATANA_FAST_TIMEOUT
+                    )
+                except asyncio.TimeoutError:
+                    print(f"[Fast] ⏱ {domain} → timeout ({KATANA_FAST_TIMEOUT}s), sin resultados")
 
                 if result.email or result.phone:
-                    result.extraction_method = "playwright" if not result.katana_found else "both"
+                    result.extraction_method = "katana"
+                    result.katana_found = True
                     result.success = True
-                    print(f"[Playwright] 🔍 {domain} -> email={result.email}, phone={result.phone}")
+                    self.katana_hits += 1
                 else:
                     result.extraction_method = "none"
-                    print(f"[Hybrid] ❌ {domain} -> Sin resultados")
+            else:
+                # === MODO PRECISO: Katana (7s) → Playwright fallback ===
+                katana_success = await self._try_katana(
+                    result, url, search_email, search_phone, search_social
+                )
+
+                if katana_success and result.email:
+                    result.extraction_method = "katana"
+                    result.katana_found = True
+                    result.success = True
+                    self.katana_hits += 1
+                else:
+                    result.playwright_used = True
+                    self.playwright_fallbacks += 1
+                    await self._try_playwright(
+                        result, url, search_email, search_phone, search_social
+                    )
+                    if result.email or result.phone:
+                        result.extraction_method = (
+                            "playwright" if not result.katana_found else "both"
+                        )
+                        result.success = True
+                    else:
+                        result.extraction_method = "none"
+
+        # Si estamos buscando email aplicamos un timeout GLOBAL de 20s para
+        # conseguir un email válido. Si se agota, devolvemos lo que tengamos
+        # (teléfono / redes sociales) y dejamos el email vacío si no pasa la
+        # validación final.
+        if search_email:
+            try:
+                await asyncio.wait_for(_run_extraction(), timeout=EMAIL_SEARCH_TIMEOUT)
+            except asyncio.TimeoutError:
+                print(
+                    f"[Hybrid] ⏱ {domain} → timeout global de email "
+                    f"({EMAIL_SEARCH_TIMEOUT}s), se usan los candidatos ya encontrados"
+                )
+        else:
+            await _run_extraction()
+
+        # === Selección final del email válido ===
+        # Reglas (ver src/web_analyzer/email_validator.py):
+        #   1. Email cuyo dominio coincida con el del sitio → ganador absoluto.
+        #   2. Email de proveedor genérico (gmail/outlook/...) que pase los
+        #      filtros anti-basura (no-aleatorio, <=25 chars, sin palabras
+        #      prohibidas tipo noreply/test/...).
+        #   3. Cualquier otro dominio se descarta.
+        if search_email:
+            final_email = select_best_email(result.email_candidates, domain)
+            result.email = final_email
+            result.all_emails = filter_emails_for_domain(result.email_candidates, domain)
+            if final_email:
+                result.success = True
+                print(f"[Hybrid] ✔ {domain} -> {final_email}")
+            else:
+                if result.email_candidates:
+                    print(
+                        f"[Hybrid] ⚠ {domain} → descartados {len(result.email_candidates)} "
+                        f"candidatos (ninguno supera la validación), email vacío"
+                    )
+                else:
+                    print(f"[Hybrid] ❌ {domain} → sin candidatos de email")
+        else:
+            # Si no se pidió email, limpiar por si acaso
+            result.email = None
+            result.all_emails = []
         
         domain_info['contact'] = result.to_dict()
         return domain_info
@@ -416,23 +477,35 @@ class HybridContactExtractor:
         
         # Emails
         if search_email:
+            site_domain = result.domain or ''
+
+            def _consider(candidate: str) -> bool:
+                """Registra candidato y, si es email del propio dominio,
+                marca result.email para permitir early-exit."""
+                if not candidate or not is_basic_email(candidate):
+                    return False
+                candidate = candidate.lower()
+                if candidate not in result.email_candidates:
+                    result.email_candidates.append(candidate)
+                if result.site_domain_email_found:
+                    return False
+                if site_domain and _domain_matches_site(_email_domain(candidate), site_domain):
+                    result.email = candidate
+                    result.site_domain_email_found = True
+                    return True
+                return False
+
             # mailto: primero (más confiable)
             for match in self.MAILTO_REGEX.finditer(html):
                 email = match.group(1).strip().lower().split('?')[0]
-                if self._is_valid_email(email) and email not in result.all_emails:
-                    result.all_emails.append(email)
-                    if not result.email:
-                        result.email = email
-                        found_new = True
-            
+                if _consider(email):
+                    found_new = True
+
             # Texto plano
             for match in self.EMAIL_REGEX.finditer(html):
                 email = match.group().lower()
-                if self._is_valid_email(email) and email not in result.all_emails:
-                    result.all_emails.append(email)
-                    if not result.email:
-                        result.email = email
-                        found_new = True
+                if _consider(email):
+                    found_new = True
         
         # Teléfonos
         if search_phone:
@@ -467,9 +540,9 @@ class HybridContactExtractor:
         return found_new
     
     def _is_valid_email(self, email: str) -> bool:
-        """Comprobación mínima de formato. Todos los emails detectados por
-        EMAIL_REGEX se conservan sin filtrado de calidad adicional."""
-        return bool(email) and '@' in email
+        """Comprobación mínima de formato. La validación real se hace
+        post-extracción con email_validator.select_best_email()."""
+        return is_basic_email(email)
     
     async def _route_handler(self, route, base_domain: str):
         """

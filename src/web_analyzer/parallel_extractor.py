@@ -9,6 +9,14 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Callable, Set
 from urllib.parse import urlparse, urljoin
 
+from src.web_analyzer.email_validator import (
+    select_best_email,
+    filter_emails_for_domain,
+    is_basic_email,
+    _domain_matches_site,
+    _email_domain,
+)
+
 try:
     from playwright.async_api import async_playwright, Page, Browser
     PLAYWRIGHT_AVAILABLE = True
@@ -17,6 +25,9 @@ except ImportError:
 
 
 MAX_WORKERS = 3
+# Timeout global para encontrar un email válido por dominio. Si se agota,
+# se deja el campo email vacío (se entregan el resto de datos).
+EMAIL_SEARCH_TIMEOUT = 20
 CHROME_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 
 BROWSER_ARGS = [
@@ -63,7 +74,10 @@ class ContactResult:
     all_emails: List[str] = field(default_factory=list)
     all_phones: List[str] = field(default_factory=list)
     social_media: List[Dict[str, str]] = field(default_factory=list)
-    
+
+    # Candidatos crudos detectados por EMAIL_REGEX (pre-validación).
+    email_candidates: List[str] = field(default_factory=list)
+
     extraction_success: bool = False
     source: str = ""
     pages_visited: int = 0
@@ -244,52 +258,60 @@ class ParallelContactExtractor:
             """)
             
             pages_visited = 0
-            
-            # === PASO 1: HOME ===
-            try:
-                await page.goto(url, wait_until='domcontentloaded', timeout=15000)
-                pages_visited += 1
-                
-                # Title
+            pages_ref = [pages_visited]
+
+            async def _do_extraction():
+                # === PASO 1: HOME ===
                 try:
-                    contact.title = await page.title()
-                except:
-                    pass
-                
-                # Simulate human
-                await self._simulate_human(page)
-                await asyncio.sleep(1)
-                
-                # Extract
-                html = await page.content()
-                if self._extract_data(html, contact, search_email, search_phone, search_social):
-                    sources.append("home")
-                
-            except:
-                pass
-            
-            # === PASO 2: CONTACT PAGES (Triple Salto) ===
-            if search_email and not contact.email:
-                for path in self.CONTACT_PATHS:
-                    if contact.email:
-                        break
-                    
+                    await page.goto(url, wait_until='domcontentloaded', timeout=15000)
+                    pages_ref[0] += 1
+
                     try:
-                        contact_url = urljoin(url, path)
-                        response = await page.goto(contact_url, wait_until='domcontentloaded', timeout=10000)
-                        
-                        if response and response.ok:
-                            pages_visited += 1
-                            await self._simulate_human(page)
-                            await asyncio.sleep(0.5)
-                            
-                            html = await page.content()
-                            if self._extract_data(html, contact, search_email, search_phone, search_social):
-                                sources.append(path.strip('/'))
-                    except:
-                        continue
-            
-            contact.pages_visited = pages_visited
+                        contact.title = await page.title()
+                    except Exception:
+                        pass
+
+                    await self._simulate_human(page)
+                    await asyncio.sleep(1)
+
+                    html = await page.content()
+                    if self._extract_data(html, contact, search_email, search_phone, search_social):
+                        sources.append("home")
+
+                except Exception:
+                    pass
+
+                # === PASO 2: CONTACT PAGES (Triple Salto) ===
+                if search_email and not contact.email:
+                    for path in self.CONTACT_PATHS:
+                        if contact.email:
+                            break
+                        try:
+                            contact_url = urljoin(url, path)
+                            response = await page.goto(
+                                contact_url, wait_until='domcontentloaded', timeout=10000
+                            )
+                            if response and response.ok:
+                                pages_ref[0] += 1
+                                await self._simulate_human(page)
+                                await asyncio.sleep(0.5)
+                                html = await page.content()
+                                if self._extract_data(
+                                    html, contact, search_email, search_phone, search_social
+                                ):
+                                    sources.append(path.strip('/'))
+                        except Exception:
+                            continue
+
+            if search_email:
+                try:
+                    await asyncio.wait_for(_do_extraction(), timeout=EMAIL_SEARCH_TIMEOUT)
+                except asyncio.TimeoutError:
+                    pass
+            else:
+                await _do_extraction()
+
+            contact.pages_visited = pages_ref[0]
             await context.close()
             
         except Exception as e:
@@ -307,9 +329,20 @@ class ParallelContactExtractor:
                     pass
         
         contact.source = " + ".join(sources) if sources else "none"
+
+        # === Selección final del email con las reglas del validador ===
+        if search_email:
+            final_email = select_best_email(contact.email_candidates, contact.domain)
+            contact.email = final_email
+            contact.all_emails = filter_emails_for_domain(
+                contact.email_candidates, contact.domain
+            )
+        else:
+            contact.email = None
+            contact.all_emails = []
+
         contact.extraction_success = bool(contact.email or contact.phone or contact.social_media)
-        
-        # Add contact to domain_info
+
         domain_info['contact'] = {
             'email': contact.email if search_email else None,
             'phone': contact.phone if search_phone else None,
@@ -348,24 +381,31 @@ class ParallelContactExtractor:
     ) -> bool:
         """Extract data from HTML."""
         found_new = False
-        
+
         # Emails
         if search_email:
+            site_domain = contact.domain or ''
+
+            def _add_candidate(raw_email: str):
+                nonlocal found_new
+                if not raw_email or not is_basic_email(raw_email):
+                    return
+                candidate = raw_email.lower()
+                if candidate not in contact.email_candidates:
+                    contact.email_candidates.append(candidate)
+                # Early-exit: email del propio dominio → fijamos contact.email
+                if site_domain and not contact.email:
+                    if _domain_matches_site(_email_domain(candidate), site_domain):
+                        contact.email = candidate
+                        found_new = True
+
             for match in self.MAILTO_REGEX.finditer(html):
                 email = match.group(1).strip().lower().split('?')[0]
-                if self._is_valid_email(email) and email not in contact.all_emails:
-                    contact.all_emails.append(email)
-                    if not contact.email:
-                        contact.email = email
-                        found_new = True
-            
+                _add_candidate(email)
+
             for match in self.EMAIL_REGEX.finditer(html):
                 email = match.group().lower()
-                if self._is_valid_email(email) and email not in contact.all_emails:
-                    contact.all_emails.append(email)
-                    if not contact.email:
-                        contact.email = email
-                        found_new = True
+                _add_candidate(email)
         
         # Phones
         if search_phone:
@@ -400,9 +440,9 @@ class ParallelContactExtractor:
         return found_new
     
     def _is_valid_email(self, email: str) -> bool:
-        """Comprobación mínima de formato. Conservamos todos los emails
-        detectados por EMAIL_REGEX sin filtrado de calidad adicional."""
-        return bool(email) and '@' in email
+        """Comprobación mínima de formato. La validación real se hace al
+        finalizar el análisis con email_validator.select_best_email()."""
+        return is_basic_email(email)
 
 
 def extract_contacts_parallel(
