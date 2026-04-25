@@ -2,12 +2,29 @@
 ProductAnalyzer — Convierte la descripción de un producto/servicio en un
 prompt de prospección que describe la web ideal que podría comprarlo.
 
-Flujo:
+Razonamiento que ejecuta la IA (en tres pasos, internos, no se devuelven al
+usuario; solo se devuelve el prompt final):
+
+  PASO 1 — Comprender el producto:
+      Qué hace, qué problema resuelve, si es B2B/B2C, si es físico/digital/
+      SaaS/servicio/formación, dependencias técnicas evidentes, etc.
+
+  PASO 2 — Definir la audiencia que lo compraría:
+      Tipo de negocio que lo necesita, sector aproximado, tamaño/modelo de
+      negocio y el dolor que el producto le resuelve.
+
+  PASO 3 — Describir la web ideal del comprador:
+      Una descripción BUENA pero BÁSICA del tipo de web que encajaría como
+      cliente. Lo bastante amplia para que existan muchas webs reales que
+      cumplan, lo bastante orientada para que sean compradores plausibles.
+      Si la descripción es demasiado precisa, no se encontrarán webs.
+
+Flujo completo en el sistema:
   1. El usuario describe su producto (ej: "Vendo software de facturación SaaS
-     para pymes españolas, precio 49€/mes, integración con contabilidad")
-  2. La IA analiza el producto y genera un prompt de prospección:
-     "agencia de contabilidad o gestoría que gestione facturas de pymes en
-      España, sin software de facturación propio"
+     para pymes españolas, precio 49€/mes, integración con contabilidad").
+  2. ProductAnalyzer hace los tres pasos anteriores con la IA y genera un
+     único prompt de prospección, p.ej.:
+       "asesoría o gestoría contable que trabaje con pymes en España"
   3. Ese prompt se olvida de la descripción del producto y se usa
      directamente como si el usuario lo hubiera escrito a mano.
   4. AIInterpreter.interpret() toma ese prompt y genera las queries de Serper.
@@ -29,51 +46,79 @@ from src.services.ai_manager import get_ai_manager
 
 _SYSTEM_PROMPT = """\
 Eres un experto en ventas B2B y prospección comercial con 15 años de experiencia \
-en identificar el perfil de cliente ideal (ICP) para cualquier producto o servicio.
+identificando el perfil de cliente ideal (ICP) para cualquier producto o servicio.
 
-Tu tarea es analizar la descripción de un producto o servicio que te va a dar un \
-vendedor y generar UN ÚNICO prompt de búsqueda que describa la web ideal que \
-podría estar interesada en comprarlo o contratarlo.
+Tu tarea, dada la descripción de un producto/servicio que vende un vendedor, es \
+generar UN ÚNICO prompt de búsqueda que describa la WEB IDEAL que podría comprarlo.
 
-REGLAS CRÍTICAS:
-1. El prompt debe describir la WEB DEL COMPRADOR, no el producto del vendedor.
-2. Piensa: ¿qué tipo de empresa o web NECESITA este producto? ¿Cuál es su sector, \
-   tamaño, tecnología actual, problema que tiene?
-3. El prompt debe ser específico y accionable para encontrar esas webs en Google.
-4. NO menciones el producto del vendedor en el prompt resultante.
-5. El prompt debe estar en lenguaje natural, como si un comercial experto buscara \
-   leads en Google.
-6. Incluye detalles sobre el tipo de web: ¿es ecommerce? ¿agencia? ¿SaaS? ¿empresa \
-   de servicios? ¿tiene tecnología X? ¿está en una región concreta?
-7. Si el producto excluye cierto tipo de webs (ej: "no para Shopify"), añade \
-   "sin [tecnología]" al prompt.
-8. El prompt debe tener entre 10 y 25 palabras, conciso y preciso.
+PIENSA INTERNAMENTE EN TRES PASOS (no muestres este razonamiento, solo el resultado):
+
+PASO 1 — Comprende el producto:
+  ¿Qué hace exactamente? ¿Qué problema resuelve? ¿Es B2B o B2C? ¿Es físico, \
+  digital, software, formación, servicio profesional...? ¿Hay dependencias \
+  técnicas evidentes (p.ej. plugin para Shopify ⇒ tienda Shopify)?
+
+PASO 2 — Define la audiencia que lo compraría:
+  ¿Qué tipo de negocio o web NECESITA este producto? Sector, tamaño aproximado, \
+  modelo de negocio, qué dolor sufre que este producto le resuelve. \
+  Si el producto está claramente atado a una región/idioma, tenlo en cuenta; \
+  si no, NO inventes una localización.
+
+PASO 3 — Describe la web ideal del comprador:
+  Convierte esa audiencia en una descripción SENCILLA y GENÉRICA de la web del \
+  comprador, lo bastante amplia para que existan muchas webs reales que encajen \
+  pero lo bastante orientada para que sean compradores plausibles.
+
+REGLAS DEL PROMPT FINAL:
+1. Describe la WEB DEL COMPRADOR, NO el producto del vendedor. Nunca nombres el \
+   producto, marca, precio ni tecnología propia del vendedor.
+2. Tiene que ser una descripción BUENA pero BÁSICA: el objetivo es que existan \
+   muchas webs reales que cumplan el perfil. Si la descripción es demasiado \
+   precisa o restrictiva, no encontraremos nada.
+3. Prefiere una categoría sectorial amplia ("agencia de marketing digital", \
+   "tienda online de moda", "clínica dental", "asesoría fiscal de pymes") antes \
+   que un nicho ultra-estrecho. NO uses combinaciones de varios filtros muy \
+   específicos a la vez (sector + tamaño + tecnología + región + sub-nicho); \
+   eso colapsa el universo de búsqueda.
+4. Solo añade un filtro extra (tecnología actual, región, modelo) si es \
+   IMPRESCINDIBLE para que el comprador tenga sentido (p.ej. plugin Shopify \
+   ⇒ "tienda online con Shopify"). Si no es imprescindible, déjalo fuera.
+5. Si el producto excluye cierto tipo de webs (p.ej. "no para Shopify"), puedes \
+   añadir "sin [tecnología]" pero solo cuando sea claramente un excluyente.
+6. Lenguaje natural, en español, como lo escribiría un comercial buscando leads.
+7. Longitud objetivo: entre 8 y 20 palabras. Cortito y limpio.
 
 EJEMPLOS:
   Producto: "Plugin de Shopify para recuperar carritos abandonados, 29€/mes"
-  → Prompt: "ecommerce con shopify que venda productos físicos en España"
+  → Prompt: "tienda online con Shopify que venda productos físicos al consumidor"
 
   Producto: "Software CRM para agencias de marketing digital, 99€/mes/usuario"
-  → Prompt: "agencia de marketing digital sin CRM propio en España o Latinoamérica"
+  → Prompt: "agencia de marketing digital con equipo comercial propio"
 
   Producto: "Servicio de diseño gráfico para marcas de moda de lujo"
-  → Prompt: "marca de moda premium o lujo con identidad visual desactualizada"
+  → Prompt: "marca de moda premium o lujo con tienda online"
 
   Producto: "API de verificación de emails para plataformas de email marketing"
-  → Prompt: "plataforma SaaS de email marketing o herramienta de marketing automation"
+  → Prompt: "plataforma de email marketing o herramienta de marketing automation"
 
   Producto: "Formación en ventas para equipos comerciales de empresas B2B"
-  → Prompt: "empresa B2B con equipo comercial propio en sector tecnología o servicios"
+  → Prompt: "empresa B2B de tecnología o servicios con equipo comercial propio"
+
+  Producto: "App de reservas online para restaurantes"
+  → Prompt: "restaurante con web propia que acepte reservas"
 
 RESPONDE ÚNICAMENTE con el prompt resultante, sin comillas, sin explicaciones, \
-sin prefijos como 'Prompt:'. Solo el texto del prompt listo para usar.\
+sin prefijos como 'Prompt:' ni el razonamiento de los tres pasos. \
+Solo el texto del prompt listo para usar.\
 """
 
 _USER_TEMPLATE = """\
 Descripción del producto/servicio del vendedor:
 {product_description}
 
-Genera el prompt de prospección que describa la web ideal que podría comprarlo.\
+Sigue internamente los tres pasos (entender el producto → definir la audiencia → \
+describir la web ideal del comprador) y devuelve SOLO el prompt final, lo \
+bastante genérico para que existan muchas webs reales que cumplan el perfil.\
 """
 
 
@@ -151,19 +196,32 @@ class ProductAnalyzer:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _clean_prompt(text: str) -> str:
-    """Limpia el texto devuelto por la IA: elimina comillas, prefijos, markdown."""
+    """Limpia el texto devuelto por la IA: elimina comillas, prefijos, markdown.
+
+    Si la IA devolvió varias líneas (p.ej. expuso por error sus tres pasos de
+    razonamiento), nos quedamos con la última línea no vacía, que es donde el
+    system prompt indica que esté el prompt final.
+    """
     import re
-    text = text.strip()
-    # Eliminar bloques markdown
-    text = re.sub(r'^```.*?```$', '', text, flags=re.DOTALL).strip()
-    # Eliminar prefijos como "Prompt:", "→", "-"
-    text = re.sub(r'^(?:prompt\s*[:→\-]?\s*|→\s*|-\s*)', '', text, flags=re.IGNORECASE).strip()
+    text = (text or "").strip()
+    # Quitar fences markdown completos al inicio/fin
+    text = re.sub(r'^```[a-zA-Z0-9]*\s*', '', text)
+    text = re.sub(r'\s*```$', '', text).strip()
+    # Si hay varias líneas, quedarnos con la última no vacía
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if lines:
+        text = lines[-1]
+    # Eliminar prefijos como "Prompt:", "→", "-", "Resultado:"
+    text = re.sub(
+        r'^(?:prompt\s*[:→\-]?\s*|resultado\s*[:→\-]?\s*|→\s*|-\s*|\*\s*)',
+        '', text, flags=re.IGNORECASE
+    ).strip()
     # Eliminar comillas envolventes
     text = re.sub(r'^["\'](.+)["\']$', r'\1', text).strip()
     # Limitar longitud
     if len(text) > 200:
         text = text[:200].rsplit(' ', 1)[0]
-    return text or text
+    return text
 
 
 def _local_analyze(description: str) -> str:
