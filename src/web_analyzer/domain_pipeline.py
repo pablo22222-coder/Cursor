@@ -1,12 +1,15 @@
 """
 DomainPipeline - Arquitectura de Workers Autónomos por Dominio
 
-Cada worker toma un dominio candidato de la cola y ejecuta las 4 fases
+Cada worker toma un dominio candidato de la cola y ejecuta las fases
 de forma completamente independiente:
 
   Fase 1 (Validación)  → Verifica que el dominio cumple el prompt
-  Fase 2 (Tecnología)  → Detecta tech-stack si hay filtros must_have/must_not
   Fase 3 (Extracción)  → Scraping de contactos (Katana o Katana+Playwright)
+
+(La Fase 2 — Análisis de Tecnologías — se ha eliminado del pipeline para
+reescribirla desde cero. Mientras no exista la nueva implementación, los
+filtros de tecnología no se aplican en este flujo.)
 
 3 workers en paralelo. Integra ResourceThrottle para escalar dinámicamente:
   - El número de pestañas por worker lo dicta throttle.tabs en tiempo real
@@ -20,11 +23,6 @@ import time
 from typing import List, Dict, Any, Optional, Callable
 
 from src.domain_validator.validator import DomainValidator, ValidationResult
-from src.web_analyzer.parallel_wappalyzer import (
-    analyze_single_domain,
-    ParallelWappalyzerAnalyzer,
-    WAPPALYZER_TIMEOUT,
-)
 from src.web_analyzer.hybrid_extractor import HybridContactExtractor
 # sales_triggers removed from pipeline — runs in domain_analyzer (deep audit mode)
 from src.utils.resource_throttle import ResourceThrottle
@@ -36,7 +34,6 @@ NUM_WORKERS = 3
 PHASE_LABELS = {
     "idle":       "En espera",
     "phase1":     "Fase 1 · Validando",
-    "phase2":     "Fase 2 · Tecnologías",
     "phase3":     "Fase 3 · Extrayendo contacto",
     "done":       "Completado",
     "rejected":   "Descartado",
@@ -107,12 +104,9 @@ class DomainPipelineOrchestrator:
         self.on_progress = on_progress    # callback(worker_states, completed, total)
         self.throttle = throttle          # ResourceThrottle o None
 
-        self.has_tech_filters = bool(
-            tech_requirements.get("must_have") or
-            tech_requirements.get("must_not") or
-            tech_requirements.get("must_have_categories") or
-            tech_requirements.get("must_not_categories")
-        )
+        # NOTA: la Fase 2 (Análisis de Tecnologías) se ha eliminado por
+        # completo del pipeline. Los filtros de tecnología no se evalúan
+        # aquí hasta que se reescriba el módulo desde cero.
 
         # Worker states (uno por worker, índice 0-2)
         self.worker_states: List[WorkerState] = [
@@ -136,7 +130,6 @@ class DomainPipelineOrchestrator:
 
         # Validador compartido (stateless, seguro entre threads)
         self._validator = DomainValidator(use_wappalyzer=False, use_pagespeed=False)
-        self._wappalyzer_checker = ParallelWappalyzerAnalyzer()
 
     # ------------------------------------------------------------------
     # Punto de entrada público
@@ -332,35 +325,11 @@ class DomainPipelineOrchestrator:
             "analysis_notes":    validation_notes,
         }
 
-        # ── FASE 2: Tecnologías (solo si hay filtros, resiliente) ─────
-        if self.has_tech_filters:
-            state.update("phase2", domain, "Ejecutando Wappalyzer...")
-            self._notify_progress()
-
-            try:
-                tech_result = analyze_single_domain(domain_info["url"])
-                domain_info["tech_profile"] = {
-                    "all_techs": tech_result["technologies"][:15],
-                    "cms":       tech_result["categories"]["cms"],
-                    "ecommerce": tech_result["categories"]["ecommerce"],
-                    "crm":       tech_result["categories"]["crm"],
-                    "email":     tech_result["categories"]["email_marketing"],
-                    "analytics": tech_result["categories"]["analytics"],
-                    "chat":      tech_result["categories"]["live_chat"],
-                }
-
-                must_have = list(getattr(self.analysis, "required_tools", []) or [])
-                must_not  = list(getattr(self.analysis, "excluded_tools",  []) or [])
-
-                if self._wappalyzer_checker.check_tech_requirements(domain_info, must_have, must_not):
-                    domain_info["tech_match"] = True
-                else:
-                    # Penalización suave: bajamos confidence pero no descartamos
-                    domain_info["confidence"] = max(0.0, domain_info["confidence"] - 15)
-                    domain_info["analysis_notes"].append("No cumple filtros de tecnología")
-
-            except Exception as e:
-                domain_info["analysis_notes"].append(f"Wappalyzer no disponible: {str(e)[:40]}")
+        # ── FASE 2 ELIMINADA ──────────────────────────────────────────
+        # El bloque de Análisis de Tecnologías (Wappalyzer) se ha quitado
+        # del pipeline. Hasta que exista la nueva implementación no se
+        # evalúan filtros de tecnología en este flujo y no se aplica
+        # ninguna penalización por tecnología sobre el confidence score.
 
         # ── FASE 3: Extracción de contacto (resiliente) ───────────────
         if self.extract_fields:

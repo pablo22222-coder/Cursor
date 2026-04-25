@@ -2,7 +2,11 @@
 Validador de dominios.
 Verifica si un dominio cumple con los criterios especificados en el prompt.
 Incluye análisis de Schema.org / JSON-LD para validación precisa.
-Usa Wappalyzergo para detección de tecnologías.
+
+Nota: la Fase 2 (Análisis de Tecnologías) se ha eliminado del validador
+para reescribirla desde cero. Por ello aquí ya no se importa Wappalyzer
+ni se ejecuta ninguna detección de tecnologías; las llamadas a
+`_analyze_technologies` y `_check_tool_filters` han sido suprimidas.
 """
 import requests
 import re
@@ -15,7 +19,6 @@ import time
 # validator accepts any analysis object with business_type, required_tools,
 # excluded_tools, validation_indicators attrs (PromptAnalysis or SearchIntent)
 from typing import Any as PromptAnalysis  # type alias for backwards compat
-from src.web_analyzer.wappalyzer_analyzer import WappalyzerAnalyzer, WappalyzerProfile
 from src.web_analyzer.pagespeed_analyzer import PageSpeedAnalyzer, PerformanceMetrics
 from src.web_search.serper_search import SearchResult
 
@@ -139,15 +142,23 @@ class DomainValidator:
     Utiliza Wappalyzergo para detección de tecnologías.
     """
     
-    def __init__(self, use_wappalyzer: bool = True, use_pagespeed: bool = False):
+    def __init__(self, use_wappalyzer: bool = False, use_pagespeed: bool = False, **_kwargs):
         """
         Args:
-            use_wappalyzer: Si usar Wappalyzergo para análisis de tecnologías
-            use_pagespeed: Si usar PageSpeed para métricas (solo si el prompt lo requiere)
+            use_wappalyzer: Conservado por compatibilidad de firma con los
+                callers existentes. La Fase 2 (Análisis de Tecnologías) se
+                ha eliminado, así que este flag se ignora y nunca se ejecuta
+                detección de tecnologías desde el validador.
+            use_pagespeed: Si usar PageSpeed para métricas (solo si el
+                prompt lo requiere).
+            **_kwargs: Acepta y descarta nombres alternativos antiguos
+                (p.ej. ``use_webtech``) para no romper callers.
         """
-        self.use_wappalyzer = use_wappalyzer
+        # La Fase 2 se ha eliminado por completo: forzamos el flag a False
+        # para que ningún camino del código intente usar Wappalyzer.
+        self.use_wappalyzer = False
         self.use_pagespeed = use_pagespeed
-        self.wappalyzer = WappalyzerAnalyzer() if use_wappalyzer else None
+        self.wappalyzer = None
         self.pagespeed = PageSpeedAnalyzer() if use_pagespeed else None
         
         # Headers para requests
@@ -213,26 +224,11 @@ class DomainValidator:
                 elif result.schema_data.get("is_service_business") and analysis.business_type in ["agencia", "agency"]:
                     result.validation_reasons.append("Schema.org confirma servicios")
             
-            # 3. Análisis de tecnologías con Wappalyzer (si está habilitado)
-            if self.use_wappalyzer:
-                tech_score, wappalyzer_profile = self._analyze_technologies(search_result.url, analysis)
-                confidence += tech_score * 0.2  # 20% del peso
-                result.tech_profile = wappalyzer_profile.to_dict() if wappalyzer_profile else None
-                
-                if tech_score > 50:
-                    result.validation_reasons.append(f"Tecnologías compatibles (score: {tech_score:.0f})")
-                
-                # Verificar filtros de herramientas si existen
-                if wappalyzer_profile:
-                    tools_ok, tools_reason = self._check_tool_filters(wappalyzer_profile, analysis)
-                    if not tools_ok:
-                        # Rechazar si no cumple con los filtros de herramientas
-                        result.rejection_reasons.append(tools_reason)
-                        confidence -= 30
-                    elif tools_reason:
-                        result.validation_reasons.append(tools_reason)
-            else:
-                confidence += 50 * 0.2  # Neutral si no se usa
+            # 3. Análisis de tecnologías — ELIMINADO.
+            # La Fase 2 se reescribirá desde cero; mientras tanto sumamos
+            # un valor neutro (50 sobre 100) al 20% del peso para no
+            # alterar el resto del scoring del validador.
+            confidence += 50 * 0.2  # Neutral hasta que exista la nueva Fase 2
             
             # 4. Análisis de rendimiento (solo si el prompt lo requiere)
             if self.use_pagespeed and (
@@ -823,163 +819,15 @@ class DomainValidator:
         
         return min(penalty, 40)  # Máximo 40 de penalización
     
-    def _check_tool_filters(self, wappalyzer_profile: WappalyzerProfile, analysis: PromptAnalysis) -> tuple:
-        """
-        Verifica si el perfil tecnológico de Wappalyzer cumple con los filtros de herramientas.
-        
-        Args:
-            wappalyzer_profile: Perfil tecnológico de Wappalyzer
-            analysis: Análisis del prompt con filtros
-            
-        Returns:
-            (cumple: bool, razón: str)
-        """
-        # Obtener filtros del análisis (si existen)
-        required_tools = getattr(analysis, 'required_tools', []) or []
-        excluded_tools = getattr(analysis, 'excluded_tools', []) or []
-        
-        if not required_tools and not excluded_tools:
-            return True, ""
-        
-        # Usar el método de WappalyzerProfile para verificar requisitos
-        meets_requirements, reason = wappalyzer_profile.check_technology_requirements(
-            wappalyzer_profile,
-            must_have=required_tools,
-            must_not=excluded_tools
-        ) if hasattr(self.wappalyzer, 'check_technology_requirements') else (True, "")
-        
-        # Usar WappalyzerAnalyzer para verificar
-        if self.wappalyzer:
-            meets_requirements, reason = self.wappalyzer.check_technology_requirements(
-                wappalyzer_profile,
-                must_have=required_tools,
-                must_not=excluded_tools
-            )
-            
-            if not meets_requirements:
-                return False, reason
-        else:
-            # Fallback: verificar manualmente
-            all_detected_tools = [t.lower() for t in wappalyzer_profile.all_technologies_names]
-            
-            # Verificar herramientas requeridas
-            for required in required_tools:
-                required_lower = required.lower()
-                
-                has_tool = False
-                
-                # Verificar por nombre
-                if any(required_lower in tool for tool in all_detected_tools):
-                    has_tool = True
-                
-                # Verificar por categoría
-                if not has_tool:
-                    if required_lower == "crm" and wappalyzer_profile.has_crm:
-                        has_tool = True
-                    elif required_lower in ["chat", "livechat", "live_chat"] and wappalyzer_profile.has_live_chat:
-                        has_tool = True
-                    elif required_lower in ["email", "email_marketing", "email marketing"] and wappalyzer_profile.has_email_marketing:
-                        has_tool = True
-                    elif required_lower in ["analytics", "analíticas"] and wappalyzer_profile.has_analytics:
-                        has_tool = True
-                    elif required_lower in ["ecommerce", "e-commerce"] and wappalyzer_profile.has_ecommerce:
-                        has_tool = True
-                    elif required_lower in ["payment", "pago"] and wappalyzer_profile.has_payment:
-                        has_tool = True
-                
-                if not has_tool:
-                    return False, f"No tiene {required}"
-            
-            # Verificar herramientas excluidas
-            for excluded in excluded_tools:
-                excluded_lower = excluded.lower()
-                
-                # Verificar por nombre
-                if any(excluded_lower in tool for tool in all_detected_tools):
-                    return False, f"Tiene {excluded} (excluido)"
-                
-                # Verificar por categoría
-                if excluded_lower == "crm" and wappalyzer_profile.has_crm:
-                    return False, f"Tiene CRM: {', '.join(wappalyzer_profile.crm[:2])}"
-                elif excluded_lower in ["chat", "livechat", "live_chat"] and wappalyzer_profile.has_live_chat:
-                    return False, f"Tiene chat: {', '.join(wappalyzer_profile.live_chat[:2])}"
-                elif excluded_lower in ["email", "email_marketing", "email marketing"] and wappalyzer_profile.has_email_marketing:
-                    return False, f"Tiene email marketing: {', '.join(wappalyzer_profile.email_marketing[:2])}"
-                elif excluded_lower in ["analytics", "analíticas"] and wappalyzer_profile.has_analytics:
-                    return False, f"Tiene analytics: {', '.join(wappalyzer_profile.analytics[:2])}"
-        
-        # Todo OK
-        if required_tools:
-            return True, f"Tiene: {', '.join(required_tools)}"
-        if excluded_tools:
-            return True, f"No tiene: {', '.join(excluded_tools)}"
-        
-        return True, ""
-    
-    def _analyze_technologies(self, url: str, analysis: PromptAnalysis) -> tuple:
-        """
-        Analiza las tecnologías de la web usando Wappalyzergo.
-        Retorna (score, wappalyzer_profile).
-        """
-        if not self.wappalyzer:
-            return 50, None
-        
-        try:
-            profile = self.wappalyzer.analyze(url)
-            score = 50.0
-            
-            if not profile.analysis_success:
-                return 50, profile
-            
-            # Verificar si las tecnologías coinciden con el tipo de negocio
-            if analysis.business_type == "ecommerce":
-                if profile.has_ecommerce:
-                    score += 30
-                if profile.has_payment:
-                    score += 10
-                # Bonus por plataformas ecommerce conocidas
-                if any(ec in [t.lower() for t in profile.all_technologies_names] 
-                       for ec in ["shopify", "woocommerce", "magento", "prestashop", "bigcommerce"]):
-                    score += 15
-            elif analysis.business_type == "saas":
-                # Indicadores de SaaS
-                if profile.has_analytics:
-                    score += 10
-                if any(fw in [t.lower() for t in profile.all_technologies_names]
-                       for fw in ["react", "vue", "angular", "next.js", "nuxt"]):
-                    score += 15
-            
-            # Verificar tecnologías requeridas
-            required_techs = getattr(analysis, 'required_technologies', []) or []
-            if required_techs:
-                for tech in required_techs:
-                    if profile.has_technology(tech):
-                        score += 10
-            
-            # Verificar tecnologías excluidas
-            excluded_techs = getattr(analysis, 'excluded_technologies', []) or []
-            if excluded_techs:
-                for tech in excluded_techs:
-                    if profile.has_technology(tech):
-                        score -= 20
-            
-            # Bonus por tener CRM (indica negocio activo)
-            if profile.has_crm:
-                score += 5
-            
-            # Bonus por tener email marketing (indica negocio activo)
-            if profile.has_email_marketing:
-                score += 5
-            
-            # Bonus por tener analytics (indica negocio que rastrea métricas)
-            if profile.has_analytics:
-                score += 3
-            
-            return max(0, min(100, score)), profile
-            
-        except Exception as e:
-            return 50, None
-    
+    # ----------------------------------------------------------------------
+    # FASE 2 ELIMINADA
+    #
+    # Las funciones `_check_tool_filters` y `_analyze_technologies` se han
+    # borrado por completo: la Fase 2 (Análisis de Tecnologías) se va a
+    # reescribir desde cero. Mientras tanto, ningún flujo del validador
+    # consulta Wappalyzer ni evalúa filtros de herramientas tecnológicas.
+    # ----------------------------------------------------------------------
+
     def _analyze_performance(self, url: str, analysis: PromptAnalysis) -> float:
         """
         Analiza las métricas de rendimiento si el prompt lo requiere.
