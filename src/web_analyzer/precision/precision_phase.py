@@ -323,8 +323,19 @@ class PrecisionPhase:
         result.verdict = verdict.to_dict()
 
         if not verdict.passed:
-            result.stage_at_failure = "judge"
-            result.passed = False
+            # Si el juez falló por un error real (no "NO" del modelo) y
+            # estamos en degradación alta, dejamos pasar el dominio para
+            # no bloquear el pipeline cuando todos los providers están caídos.
+            if verdict.error and self.degradation.relax_level >= 2:
+                result.passed = True
+                result.stage_at_failure = None
+                result.error = (
+                    "judge_failed_passing_due_to_relax: " + str(verdict.error)[:80]
+                )
+                self.degradation.mark_pass()
+            else:
+                result.stage_at_failure = "judge"
+                result.passed = False
         else:
             result.passed = True
             self.degradation.mark_pass()
