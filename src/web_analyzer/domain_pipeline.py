@@ -5,17 +5,22 @@ Cada worker toma un dominio candidato de la cola y ejecuta las fases
 de forma completamente independiente:
 
   Fase 1 (Validación)  → Verifica que el dominio cumple el prompt
+  Fase 2 (Precisión)   → Solo en modo precisión: HTML con httpx + BS4,
+                          tech scanner (Wappalyzer + ADN) y/o PageSpeed
+                          según decida la IA, y veredicto final con un
+                          auditor IA (SI/NO).
   Fase 3 (Extracción)  → Scraping de contactos (Katana o Katana+Playwright)
-
-(La Fase 2 — Análisis de Tecnologías — se ha eliminado del pipeline para
-reescribirla desde cero. Mientras no exista la nueva implementación, los
-filtros de tecnología no se aplican en este flujo.)
 
 3 workers en paralelo. Integra ResourceThrottle para escalar dinámicamente:
   - El número de pestañas por worker lo dicta throttle.tabs en tiempo real
   - Si throttle.workers < workers_activos, los workers excedentes esperan
     (no toman nuevos dominios) hasta que el nivel suba
   - Si throttle.should_stop → el pipeline termina de forma segura
+
+Sistema de degradación progresiva (precisión):
+  Si la Fase 2 lleva mucho tiempo sin dejar pasar dominios suficientes,
+  el `PrecisionDegradation` compartido va subiendo de nivel para
+  relajar al juez IA y, eventualmente, desactivar PageSpeed.
 """
 import threading
 import queue
@@ -26,6 +31,10 @@ from src.domain_validator.validator import DomainValidator, ValidationResult
 from src.web_analyzer.hybrid_extractor import HybridContactExtractor
 # sales_triggers removed from pipeline — runs in domain_analyzer (deep audit mode)
 from src.utils.resource_throttle import ResourceThrottle
+from src.web_analyzer.precision.precision_phase import (
+    PrecisionPhase,
+    PrecisionDegradation,
+)
 
 # Número máximo de workers (el throttle puede reducirlo dinámicamente)
 NUM_WORKERS = 3
@@ -34,6 +43,7 @@ NUM_WORKERS = 3
 PHASE_LABELS = {
     "idle":       "En espera",
     "phase1":     "Fase 1 · Validando",
+    "phase2":     "Fase 2 · Precisión",
     "phase3":     "Fase 3 · Extrayendo contacto",
     "done":       "Completado",
     "rejected":   "Descartado",
@@ -130,6 +140,13 @@ class DomainPipelineOrchestrator:
 
         # Validador compartido (stateless, seguro entre threads)
         self._validator = DomainValidator(use_wappalyzer=False, use_pagespeed=False)
+
+        # Sistema de degradación progresiva de la Fase 2 (solo precisión).
+        # Compartido por todos los workers; cuenta el tiempo que llevamos
+        # sin dejar pasar a un dominio para subir el nivel y aflojar.
+        self._precision_degradation: Optional[PrecisionDegradation] = (
+            None if self.fast_mode else PrecisionDegradation()
+        )
 
     # ------------------------------------------------------------------
     # Punto de entrada público
@@ -325,11 +342,67 @@ class DomainPipelineOrchestrator:
             "analysis_notes":    validation_notes,
         }
 
-        # ── FASE 2 ELIMINADA ──────────────────────────────────────────
-        # El bloque de Análisis de Tecnologías (Wappalyzer) se ha quitado
-        # del pipeline. Hasta que exista la nueva implementación no se
-        # evalúan filtros de tecnología en este flujo y no se aplica
-        # ninguna penalización por tecnología sobre el confidence score.
+        # ── FASE 2: Solo en modo precisión ────────────────────────────
+        # Descarga el HTML con httpx (sin Playwright), construye un
+        # contexto en capas con BeautifulSoup, ejecuta opcionalmente el
+        # Tech Scanner (Wappalyzer + ADN) y/o PageSpeed Insights según
+        # decidió la IA en el routing, y le pide a un auditor IA un
+        # veredicto SI/NO. Si el veredicto es NO el dominio se descarta.
+        if not self.fast_mode:
+            state.update("phase2", domain, "Auditoría IA · HTML + tech + PageSpeed...")
+            self._notify_progress()
+
+            try:
+                def _on_stage(stage_name: str, message: str):
+                    state.update("phase2", domain, message)
+                    self._notify_progress()
+
+                phase2 = PrecisionPhase(
+                    intent=self.analysis,
+                    degradation=self._precision_degradation,
+                    on_stage=_on_stage,
+                )
+                phase2_result = phase2.run(domain_name, domain_url)
+                domain_info["precision_phase"] = phase2_result.to_dict()
+                # Anotaciones para el frontend
+                if phase2_result.tech_findings:
+                    domain_info["tech_profile"] = {
+                        "all_techs":  (phase2_result.tech_findings.get("wappalyzer_all_techs") or [])[:15],
+                        "categories": phase2_result.tech_findings.get("wappalyzer_categories") or {},
+                        "confirmed":  phase2_result.tech_findings.get("technologies_confirmed") or {},
+                        "footprint":  phase2_result.tech_findings.get("raw_footprint") or [],
+                        "social":     phase2_result.tech_findings.get("social_profiles") or [],
+                    }
+                    domain_info["tech_match"] = bool(
+                        phase2_result.tech_findings.get("all_targets_met")
+                    )
+
+                if not phase2_result.passed:
+                    reason = (
+                        phase2_result.error
+                        or (phase2_result.verdict or {}).get("raw_response")
+                        or "veredicto NO"
+                    )
+                    print(
+                        f"[Pipeline] ✗ {domain} — Fase 2 falló "
+                        f"(stage={phase2_result.stage_at_failure}): {str(reason)[:80]}"
+                    )
+                    state.update("rejected", domain, f"Fase 2: {str(reason)[:60]}")
+                    self._mark_completed()
+                    return
+                else:
+                    print(
+                        f"[Pipeline] ✓ {domain} — Fase 2 OK "
+                        f"(degrad={phase2_result.degradation_level}, "
+                        f"ps_used={phase2_result.pagespeed_used})"
+                    )
+            except Exception as e:
+                # En caso de error inesperado en la fase 2, no rompemos
+                # el pipeline — anotamos y dejamos pasar (resiliencia).
+                domain_info["analysis_notes"].append(
+                    f"Fase 2 error inesperado: {str(e)[:60]}"
+                )
+                print(f"[Pipeline] ⚠ {domain} — excepción en Fase 2: {e}")
 
         # ── FASE 3: Extracción de contacto (resiliente) ───────────────
         if self.extract_fields:
@@ -388,6 +461,12 @@ class DomainPipelineOrchestrator:
     # ------------------------------------------------------------------
     # Helpers internos
     # ------------------------------------------------------------------
+
+    def precision_degradation_status(self) -> Optional[Dict[str, Any]]:
+        """Snapshot del estado del sistema de degradación. None si no aplica."""
+        if self._precision_degradation is None:
+            return None
+        return self._precision_degradation.status_dict()
 
     def _mark_completed(self):
         with self._completed_lock:

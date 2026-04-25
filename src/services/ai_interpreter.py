@@ -190,6 +190,21 @@ class SearchIntent:
     validation_indicators: List[str] = field(default_factory=list)
     exclusion_indicators: List[str] = field(default_factory=list)
 
+    # ── Decisiones de routing para la Fase 2 (modo precisión) ────────
+    # Tech Stack Scanner (Wappalyzer + DNA)
+    use_scanner: bool = False
+    scanner_confidence: str = "low"        # "high" | "medium" | "low"
+    scanner_reason: str = ""
+    scanner_extractable: bool = True
+    scanner_dimensions: List[str] = field(default_factory=list)
+    target_techs: List[str] = field(default_factory=list)
+
+    # PageSpeed Insights
+    use_pagespeed: bool = False
+    pagespeed_confidence: str = "low"
+    pagespeed_reason: str = ""
+    pagespeed_categories: List[str] = field(default_factory=list)
+
     # Meta
     confidence: float = 0.5
     analysis_notes: str = ""
@@ -222,6 +237,16 @@ class SearchIntent:
             "confidence":            self.confidence,
             "analysis_notes":        self.analysis_notes,
             "provider_used":         self.provider_used,
+            "use_scanner":           self.use_scanner,
+            "scanner_confidence":    self.scanner_confidence,
+            "scanner_reason":        self.scanner_reason,
+            "scanner_extractable":   self.scanner_extractable,
+            "scanner_dimensions":    self.scanner_dimensions,
+            "target_techs":          self.target_techs,
+            "use_pagespeed":         self.use_pagespeed,
+            "pagespeed_confidence":  self.pagespeed_confidence,
+            "pagespeed_reason":      self.pagespeed_reason,
+            "pagespeed_categories":  self.pagespeed_categories,
         }
 
 
@@ -243,12 +268,22 @@ class AIInterpreter:
     def __init__(self):
         self._ai = get_ai_manager()
 
-    def interpret(self, user_prompt: str) -> SearchIntent:
+    def interpret(
+        self,
+        user_prompt: str,
+        *,
+        precision_routing: bool = True,
+    ) -> SearchIntent:
         """
         Analiza el prompt y devuelve un SearchIntent completo.
-        Usa AIManager para fallback automático entre proveedores.
-        Si todos fallan, ejecuta análisis local basado en regex.
+
+        Si `precision_routing=True` (por defecto), también consulta a la IA
+        las dos decisiones de routing de la Fase 2 (Tech Stack Scanner y
+        PageSpeed) en paralelo y rellena los campos correspondientes del
+        SearchIntent. El consumidor (DomainPipelineOrchestrator) ignorará
+        estos campos cuando esté en `fast_mode=True`.
         """
+        # ── 1) Interpretación principal ──────────────────────────────
         user_message = _USER_PROMPT_TEMPLATE.format(prompt=user_prompt)
 
         response = self._ai.complete(
@@ -256,16 +291,53 @@ class AIInterpreter:
             system_prompt=_SYSTEM_PROMPT,
         )
 
+        intent: Optional[SearchIntent] = None
         if response.success and response.text.strip():
             try:
                 data = _parse_json_response(response.text)
-                return _build_intent(data, user_prompt, response.provider)
+                intent = _build_intent(data, user_prompt, response.provider)
             except Exception as e:
                 print(f"[AIInterpreter] Error parseando JSON de {response.provider}: {e}")
 
-        # Fallback local
-        print("[AIInterpreter] Usando análisis local (todos los providers fallaron)")
-        return _local_analyze(user_prompt)
+        if intent is None:
+            print("[AIInterpreter] Usando análisis local (todos los providers fallaron)")
+            intent = _local_analyze(user_prompt)
+
+        # ── 2) Routing de la Fase 2 (precisión) ──────────────────────
+        if precision_routing:
+            try:
+                from src.services.precision_routers import decide_routing_parallel
+                routing = decide_routing_parallel(user_prompt)
+                tech = routing.get("tech") or {}
+                pse  = routing.get("pagespeed") or {}
+
+                intent.use_scanner        = bool(tech.get("use_scanner"))
+                intent.scanner_confidence = str(tech.get("confidence") or "low")
+                intent.scanner_reason     = str(tech.get("reason") or "")
+                intent.scanner_extractable= bool(tech.get("extractable", True))
+                intent.scanner_dimensions = list(tech.get("relevant_dimensions") or [])
+                intent.target_techs       = list(tech.get("target_techs") or [])
+
+                intent.use_pagespeed       = bool(pse.get("use_pagespeed"))
+                intent.pagespeed_confidence= str(pse.get("confidence") or "low")
+                intent.pagespeed_reason    = str(pse.get("reason") or "")
+                intent.pagespeed_categories= list(pse.get("categories") or [])
+
+                # Si el router de tech no devolvió target_techs pero el
+                # interpretador principal sí trajo must_have, los reusamos.
+                if intent.use_scanner and not intent.target_techs and intent.must_have:
+                    intent.target_techs = list(intent.must_have)
+
+                print(
+                    f"[AIInterpreter] routing → tech_scanner={intent.use_scanner} "
+                    f"({tech.get('provider')}, {intent.scanner_confidence}), "
+                    f"pagespeed={intent.use_pagespeed} "
+                    f"({pse.get('provider')}, {intent.pagespeed_confidence})"
+                )
+            except Exception as e:  # pragma: no cover — defensivo
+                print(f"[AIInterpreter] precision_routing falló: {e}")
+
+        return intent
 
 
 # ─────────────────────────────────────────────────────────────────────────────
