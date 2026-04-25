@@ -104,6 +104,10 @@ class HTMLContext:
     # Cuerpo limpio
     body_text: str = ""
 
+    # HTML crudo (para reutilizar en otras fases sin volver a descargar).
+    # NO se incluye en to_dict() para no inflar logs / payloads.
+    raw_html: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "url": self.url,
@@ -441,6 +445,7 @@ def build_context(
         html = fetched.get("html") or ""
 
     ctx.html_length = len(html)
+    ctx.raw_html = html or None
 
     if not html:
         ctx.error = ctx.error or "empty_html"

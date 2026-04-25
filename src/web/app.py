@@ -72,6 +72,8 @@ def create_app():
             {"worker_id": i + 1, "phase": "idle", "phase_label": "En espera", "domain": "", "detail": ""}
             for i in range(NUM_WORKERS)
         ],
+        # Snapshot del sistema de degradación de la Fase 2 (solo precisión)
+        "precision_degradation": None,
     }
     
     # Estado global para análisis de dominios
@@ -211,23 +213,34 @@ def create_app():
                 label = f"[{source_label}] " if source_label else ""
                 search_state["status"] = f"{label}Interpretando prompt con IA..."
 
-                intent: SearchIntent = AIInterpreter().interpret(prompt)
+                # En modo precisión también se ejecutan las dos decisiones
+                # de routing de la Fase 2 (Tech Scanner y PageSpeed). En
+                # modo rápido se omiten para no añadir latencia.
+                intent: SearchIntent = AIInterpreter().interpret(
+                    prompt, precision_routing=not fast_mode,
+                )
 
                 search_state["progress"] = 20
                 search_state["analysis"] = {
-                    "business_type":   intent.business_type,
-                    "product_category":intent.product_category,
-                    "service_type":    intent.service_type,
-                    "niche":           intent.niche,
-                    "queries_count":   len(intent.search_queries),
-                    "queries":         intent.search_queries[:5],
-                    "tech_must_have":  intent.must_have,
-                    "tech_must_not":   intent.must_not,
-                    "provider_used":   intent.provider_used,
-                    "confidence":      intent.confidence,
-                    "notes":           intent.analysis_notes,
-                    "source_label":    source_label,
-                    "prospect_prompt": prompt,
+                    "business_type":     intent.business_type,
+                    "product_category":  intent.product_category,
+                    "service_type":      intent.service_type,
+                    "niche":             intent.niche,
+                    "queries_count":     len(intent.search_queries),
+                    "queries":           intent.search_queries[:5],
+                    "tech_must_have":    intent.must_have,
+                    "tech_must_not":     intent.must_not,
+                    "provider_used":     intent.provider_used,
+                    "confidence":        intent.confidence,
+                    "notes":             intent.analysis_notes,
+                    "source_label":      source_label,
+                    "prospect_prompt":   prompt,
+                    "precision_mode":    not fast_mode,
+                    "use_scanner":       intent.use_scanner,
+                    "scanner_dimensions":intent.scanner_dimensions,
+                    "target_techs":      intent.target_techs,
+                    "use_pagespeed":     intent.use_pagespeed,
+                    "pagespeed_categories": intent.pagespeed_categories,
                 }
 
                 tech_requirements = {
@@ -251,6 +264,11 @@ def create_app():
                     return
 
                 # ── PASO 2: Pipeline autónomo por dominio ─────────────────
+                # Esta variable la rellena el orchestrator un poco más
+                # abajo; el callback la consulta para reportar el nivel
+                # de degradación en tiempo real.
+                _orchestrator_holder: Dict[str, Any] = {}
+
                 def on_pipeline_progress(worker_states, completed, total):
                     search_state["workers"] = worker_states
                     if total > 0:
@@ -263,6 +281,15 @@ def create_app():
                         search_state["status"] = "  |  ".join(parts)
                     else:
                         search_state["status"] = f"Procesando... {completed}/{total}"
+                    # Refrescar snapshot del sistema de degradación de Fase 2
+                    orch = _orchestrator_holder.get("orchestrator")
+                    if orch is not None:
+                        try:
+                            search_state["precision_degradation"] = (
+                                orch.precision_degradation_status()
+                            )
+                        except Exception:
+                            pass
 
                 throttle = reset_throttle()
                 orchestrator = DomainPipelineOrchestrator(
@@ -273,6 +300,10 @@ def create_app():
                     max_results=max_results,
                     on_progress=on_pipeline_progress,
                     throttle=throttle,
+                )
+                _orchestrator_holder["orchestrator"] = orchestrator
+                search_state["precision_degradation"] = (
+                    orchestrator.precision_degradation_status()
                 )
 
                 final_results = orchestrator.run(search_results)
@@ -383,6 +414,7 @@ def create_app():
             "analysis":      search_state["analysis"],
             "workers":       search_state.get("workers", []),
             "throttle":      throttle_data,
+            "precision_degradation": search_state.get("precision_degradation"),
         })
     
     @app.route('/api/results')
