@@ -1,15 +1,31 @@
 """
 DomainPipeline - Arquitectura de Workers Autónomos por Dominio
 
-Cada worker toma un dominio candidato de la cola y ejecuta las fases
-de forma completamente independiente:
+Cada worker toma un dominio candidato de la cola y ejecuta el ciclo
+COMPLETO sobre ese dominio antes de tomar el siguiente. Si el dominio
+falla cualquier comprobación obligatoria, el worker lo descarta
+(silenciosamente, sin guardarlo) y pide otro de la cola hasta llegar a
+`max_results`.
 
-  Fase 1 (Validación)  → Verifica que el dominio cumple el prompt
-  Fase 2 (Precisión)   → Solo en modo precisión: HTML con httpx + BS4,
-                          tech scanner (Wappalyzer + ADN) y/o PageSpeed
-                          según decida la IA, y veredicto final con un
-                          auditor IA (SI/NO).
-  Fase 3 (Extracción)  → Scraping de contactos (Katana o Katana+Playwright)
+Modo RÁPIDO (fast_mode=True):
+  Fase 1 → Validación de tipo de web (snippet + Schema.org).
+  Fase 2 (lite) → Comprobación rápida de "está viva" (httpx + regex):
+                  HTTP < 400, HTML mínimo, no parking, no error genérico,
+                  contenido textual real. Si NO está viva → descarte y
+                  el worker busca otro dominio.
+  Fase 3 → Extracción de contactos (Katana). Independientemente de si
+           se encuentra todo lo que el usuario pidió o no, el resultado
+           se devuelve al frontend.
+
+Modo PRECISIÓN (fast_mode=False):
+  Fase 1 → Igual.
+  Fase 2 → Auditoría completa: HTML con httpx + BS4, tech scanner
+           (Wappalyzer + ADN) y/o PageSpeed según decida la IA, y
+           veredicto final con un auditor IA (SI/NO).
+  Fase 3 → Extracción de contactos (Katana + Playwright). DESPUÉS de
+           la extracción se comprueba que TODOS los campos pedidos
+           (`extract_fields`) estén presentes; si falta alguno se
+           descarta el dominio y el worker busca otro.
 
 3 workers en paralelo. Integra ResourceThrottle para escalar dinámicamente:
   - El número de pestañas por worker lo dicta throttle.tabs en tiempo real
@@ -35,6 +51,7 @@ from src.web_analyzer.precision.precision_phase import (
     PrecisionPhase,
     PrecisionDegradation,
 )
+from src.web_analyzer.quick_check import is_alive as quick_is_alive
 
 # Número máximo de workers (el throttle puede reducirlo dinámicamente)
 NUM_WORKERS = 3
@@ -44,6 +61,7 @@ PHASE_LABELS = {
     "idle":       "En espera",
     "phase1":     "Fase 1 · Validando",
     "phase2":     "Fase 2 · Precisión",
+    "phase2_fast":"Fase 2 · Comprobación rápida",
     "phase3":     "Fase 3 · Extrayendo contacto",
     "done":       "Completado",
     "rejected":   "Descartado",
@@ -342,6 +360,38 @@ class DomainPipelineOrchestrator:
             "analysis_notes":    validation_notes,
         }
 
+        # ── FASE 2 LITE: Solo en modo rápido ──────────────────────────
+        # Comprobación ultra-ligera de "está viva" con httpx + regex.
+        # Sin Playwright, sin IA, sin Wappalyzer. Si la web responde
+        # con error, está parqueada o vacía → el worker descarta este
+        # dominio y va a por otro (no se guarda nada). Si pasa la
+        # comprobación, sigue a la Fase 3 y SIEMPRE se entrega el
+        # resultado al frontend, encuentre lo que encuentre o no.
+        if self.fast_mode:
+            state.update("phase2_fast", domain, "Comprobando que la web esté viva...")
+            self._notify_progress()
+            try:
+                check = quick_is_alive(domain_url)
+                domain_info["quick_check"] = check.to_dict()
+            except Exception as e:
+                # Cualquier error en la comprobación: no bloqueamos el
+                # pipeline. Tratamos como "viva" para no perder el dominio
+                # por un fallo nuestro y dejamos que la Fase 3 lo intente.
+                check = None
+                domain_info["analysis_notes"].append(
+                    f"QuickCheck error inesperado: {str(e)[:60]}"
+                )
+                print(f"[Pipeline] ⚠ {domain} — excepción en QuickCheck: {e}")
+
+            if check is not None and not check.alive:
+                print(
+                    f"[Pipeline] ✗ {domain} — QuickCheck falló "
+                    f"({check.reason}, status={check.status_code})"
+                )
+                state.update("rejected", domain, f"Web rota: {check.reason[:60]}")
+                self._mark_completed()
+                return
+
         # ── FASE 2: Solo en modo precisión ────────────────────────────
         # Descarga el HTML con httpx (sin Playwright), construye un
         # contexto en capas con BeautifulSoup, ejecuta opcionalmente el
@@ -438,6 +488,28 @@ class DomainPipelineOrchestrator:
         else:
             domain_info["contact"] = None
 
+        # ── Gate de completitud (SOLO modo precisión) ─────────────────
+        # Tras la extracción, en modo precisión exigimos que TODOS los
+        # campos pedidos por el usuario estén presentes; si falta alguno
+        # descartamos el dominio y el worker va a buscar otro. En modo
+        # rápido este gate NO se aplica: se devuelve siempre lo que
+        # haya, completo o no.
+        if (not self.fast_mode) and self.extract_fields:
+            missing = self._missing_required_fields(
+                domain_info.get("contact"), self.extract_fields
+            )
+            if missing:
+                print(
+                    f"[Pipeline] ✗ {domain} — modo preciso: faltan campos "
+                    f"requeridos {missing}, descartado"
+                )
+                state.update(
+                    "rejected", domain,
+                    f"Faltan datos: {', '.join(missing)}"
+                )
+                self._mark_completed()
+                return
+
         # ── Guardar resultado — siempre llega al frontend ─────────────
         state.update("done", domain, "")
         with self._results_lock:
@@ -467,6 +539,55 @@ class DomainPipelineOrchestrator:
         if self._precision_degradation is None:
             return None
         return self._precision_degradation.status_dict()
+
+    @staticmethod
+    def _missing_required_fields(
+        contact: Optional[Dict[str, Any]],
+        fields: List[str],
+    ) -> List[str]:
+        """
+        Devuelve la lista de campos pedidos por el usuario que NO se
+        han conseguido extraer. Si la lista está vacía, todos están
+        presentes.
+
+        El mapeo es:
+          · 'email'  → contact['email'] no vacío
+          · 'phone'  → contact['phone'] no vacío
+          · 'social' → contact['social_media'] no vacío
+
+        En modo precisión usamos esto para descartar dominios
+        incompletos. En modo rápido no se aplica.
+        """
+        if not fields:
+            return []
+        if not contact:
+            return list(fields)
+
+        def _empty(value) -> bool:
+            if value is None:
+                return True
+            if isinstance(value, str):
+                return not value.strip()
+            if isinstance(value, (list, tuple, dict)):
+                return len(value) == 0
+            return False
+
+        missing: List[str] = []
+        for field_name in fields:
+            f = (field_name or "").strip().lower()
+            if f == "email":
+                if _empty(contact.get("email")):
+                    missing.append("email")
+            elif f == "phone":
+                if _empty(contact.get("phone")):
+                    missing.append("phone")
+            elif f == "social":
+                if _empty(contact.get("social_media")):
+                    missing.append("social")
+            else:
+                if _empty(contact.get(f)):
+                    missing.append(f)
+        return missing
 
     def _mark_completed(self):
         with self._completed_lock:
