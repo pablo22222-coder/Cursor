@@ -22,7 +22,8 @@ import re
 import threading
 from typing import Any, Dict, List, Optional
 
-from src.services.ai_manager import get_ai_manager
+from src.services.ai_manager import complete_for_task
+from src.services.task_chains import TASK_PROMPT_ANALYSIS
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -352,9 +353,15 @@ def decide_tech_scanner(user_prompt: str) -> Dict[str, Any]:
         return default
 
     try:
-        ai = get_ai_manager()
         msg = _TECH_ROUTER_USER_TEMPLATE.format(prompt=user_prompt[:1500])
-        resp = ai.complete(prompt=msg, system_prompt=_TECH_ROUTER_SYSTEM)
+        # Cadena TASK_PROMPT_ANALYSIS:
+        #   Groq 70B → SambaNova 405B → Gemini Flash → User Own
+        resp = complete_for_task(
+            TASK_PROMPT_ANALYSIS,
+            prompt=msg,
+            system_prompt=_TECH_ROUTER_SYSTEM,
+            json_mode=True,
+        )
     except Exception as exc:  # pragma: no cover — defensivo
         default["reason"] = f"router_error:{type(exc).__name__}"
         return default
@@ -391,9 +398,14 @@ def decide_pagespeed(user_prompt: str) -> Dict[str, Any]:
         return default
 
     try:
-        ai = get_ai_manager()
         msg = _PAGESPEED_ROUTER_USER_TEMPLATE.format(prompt=user_prompt[:1500])
-        resp = ai.complete(prompt=msg, system_prompt=_PAGESPEED_ROUTER_SYSTEM)
+        # Cadena TASK_PROMPT_ANALYSIS (mismo orden que el router de tech)
+        resp = complete_for_task(
+            TASK_PROMPT_ANALYSIS,
+            prompt=msg,
+            system_prompt=_PAGESPEED_ROUTER_SYSTEM,
+            json_mode=True,
+        )
     except Exception as exc:  # pragma: no cover — defensivo
         default["reason"] = f"router_error:{type(exc).__name__}"
         return default

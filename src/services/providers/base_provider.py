@@ -47,13 +47,25 @@ class BaseProvider(ABC):
     RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
     @abstractmethod
-    def complete(self, prompt: str, system_prompt: str = "") -> AIResponse:
+    def complete(
+        self,
+        prompt: str,
+        system_prompt: str = "",
+        *,
+        model: Optional[str] = None,
+    ) -> AIResponse:
         """
         Envía `prompt` al LLM y devuelve la respuesta normalizada.
 
         Args:
             prompt:        Mensaje del usuario / contenido principal.
             system_prompt: Instrucciones de sistema (si el provider lo soporta).
+            model:         Modelo concreto a usar para ESTA llamada. Si es
+                           None se usa el atributo ``self.model``.
+                           Permite que el mismo provider sirva varios
+                           modelos a través de distintas cadenas de tareas
+                           (p.ej. Groq con 8B para validación y 70B para
+                           análisis sin instanciar dos veces el provider).
 
         Returns:
             AIResponse con el texto generado.
@@ -67,10 +79,12 @@ class BaseProvider(ABC):
     def is_available(self) -> bool:
         """True si el provider está configurado (API key presente)."""
 
-    def _timed_complete(self, call) -> AIResponse:
+    def _timed_complete(self, call, *, model: Optional[str] = None) -> AIResponse:
         """
         Wrapper que mide la latencia de una llamada y devuelve AIResponse.
-        `call` es un callable () → str (texto bruto).
+        `call` es un callable () → str (texto bruto). `model` es el modelo
+        efectivo usado en esta llamada (puede diferir de ``self.model``
+        cuando se le pasa un override al provider).
         """
         t0 = time.monotonic()
         text = call()
@@ -78,7 +92,7 @@ class BaseProvider(ABC):
         return AIResponse(
             text=text,
             provider=self.name,
-            model=self.model,
+            model=model or self.model,
             latency_ms=round(latency, 1),
             success=True,
         )

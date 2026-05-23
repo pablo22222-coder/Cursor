@@ -98,12 +98,21 @@ class WebLLMProvider(BaseProvider):
         except ImportError:
             return False
 
-    def complete(self, prompt: str, system_prompt: str = "") -> AIResponse:
+    def complete(
+        self,
+        prompt: str,
+        system_prompt: str = "",
+        *,
+        model: Optional[str] = None,
+    ) -> AIResponse:
         if not self.is_available():
             raise ImportError(
                 "llama-cpp-python no instalado. "
                 "Instalar con: pip install llama-cpp-python"
             )
+
+        # Solo soporta el modelo GGUF cargado; ignoramos overrides.
+        effective_model = self.model
 
         def _call() -> str:
             llama = _get_llama()
@@ -119,4 +128,4 @@ class WebLLMProvider(BaseProvider):
             )
             return output["choices"][0]["message"]["content"]
 
-        return self._timed_complete(_call)
+        return self._timed_complete(_call, model=effective_model)

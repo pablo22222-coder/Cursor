@@ -52,10 +52,16 @@ class Settings:
     serper_api_key: str = field(default="")
     gemini_api_key: str = field(default="")
     pagespeed_api_key: str = field(default="")
-    # AI Fallback Chain
+    # AI Fallback Chain (cada provider lee su propia env var en lazy mode;
+    # estas copias en Settings se mantienen por compatibilidad / status).
     groq_api_key: str = field(default="")
     cerebras_api_key: str = field(default="")
     sambanova_api_key: str = field(default="")
+    # Clave propia del usuario (último eslabón de cada cadena)
+    user_own_api_key: str = field(default="")
+    user_own_base_url: str = field(default="")
+    user_own_model: str = field(default="")
+    user_own_provider_name: str = field(default="")
 
     
     # Serper Config
@@ -88,13 +94,27 @@ class Settings:
         self.groq_api_key      = os.getenv("GROQ_API_KEY", "")
         self.cerebras_api_key  = os.getenv("CEREBRAS_API_KEY", "")
         self.sambanova_api_key = os.getenv("SAMBANOVA_API_KEY", "")
-        
+        # Clave propia del usuario (último eslabón opcional)
+        self.user_own_api_key       = os.getenv("USER_OWN_API_KEY", "")
+        self.user_own_base_url      = os.getenv("USER_OWN_BASE_URL", "")
+        self.user_own_model         = os.getenv("USER_OWN_MODEL", "")
+        self.user_own_provider_name = os.getenv("USER_OWN_PROVIDER_NAME", "")
+
         # Validar que las keys críticas existen
         if not self.serper_api_key:
             print("⚠️  ADVERTENCIA: SERPER_API_KEY no configurada. Las búsquedas no funcionarán.")
-        
-        if not self.gemini_api_key:
-            print("⚠️  ADVERTENCIA: GEMINI_API_KEY no configurada. Se usará análisis local.")
+
+        # Aviso suave si NINGÚN provider de IA está configurado.
+        if not any([
+            self.groq_api_key, self.cerebras_api_key,
+            self.sambanova_api_key, self.gemini_api_key,
+            self.user_own_api_key,
+        ]):
+            print(
+                "⚠️  ADVERTENCIA: ningún proveedor de IA configurado "
+                "(GROQ/SAMBANOVA/CEREBRAS/GEMINI/USER_OWN_API_KEY). "
+                "El sistema usará análisis local heurístico."
+            )
     
     def is_gemini_configured(self) -> bool:
         """Verifica si Gemini está configurado."""

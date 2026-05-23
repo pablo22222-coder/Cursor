@@ -1,9 +1,14 @@
 """
-Provider 3 — SambaNova Cloud (Terciario)
-Modelo: Meta-Llama-3.2-3B-Instruct
-Prioridad: Alta cuota gratuita
+Provider 3 — SambaNova Cloud
+Modelo por defecto: Meta-Llama-3.1-405B-Instruct (modelo top de SambaNova,
+ideal para la generación de queries de búsqueda donde la calidad importa).
+
+Se acepta override por llamada vía el parámetro `model` (p.ej.
+"Meta-Llama-3.1-70B-Instruct" si el 405B está saturado).
 """
 import os
+from typing import Optional
+
 import requests
 
 from src.services.providers.base_provider import BaseProvider, AIResponse, ProviderError
@@ -13,7 +18,7 @@ _ENV_KEY = "SAMBANOVA_API_KEY"
 
 class SambanovaProvider(BaseProvider):
     name     = "SambaNova"
-    model    = "Meta-Llama-3.2-3B-Instruct"
+    model    = "Meta-Llama-3.1-405B-Instruct"
     priority = 2
 
     _API_URL = "https://api.sambanova.ai/v1/chat/completions"
@@ -30,10 +35,17 @@ class SambanovaProvider(BaseProvider):
     def is_available(self) -> bool:
         return len(self._api_key) > 10
 
-    def complete(self, prompt: str, system_prompt: str = "") -> AIResponse:
+    def complete(
+        self,
+        prompt: str,
+        system_prompt: str = "",
+        *,
+        model: Optional[str] = None,
+    ) -> AIResponse:
         if not self.is_available():
             raise ValueError(f"{_ENV_KEY} no configurada")
 
+        effective_model = model or self.model
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -47,7 +59,7 @@ class SambanovaProvider(BaseProvider):
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": self.model,
+                    "model": effective_model,
                     "messages": messages,
                     "temperature": 0.1,
                     "max_tokens": 2048,
@@ -60,4 +72,4 @@ class SambanovaProvider(BaseProvider):
             resp.raise_for_status()
             return resp.json()["choices"][0]["message"]["content"]
 
-        return self._timed_complete(_call)
+        return self._timed_complete(_call, model=effective_model)
