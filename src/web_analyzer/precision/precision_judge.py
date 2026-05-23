@@ -6,8 +6,8 @@ el informe de PageSpeed, y le pide a la IA un veredicto SI/NO sobre si
 ese dominio cumple con lo que pidió el usuario y es suficientemente
 fiable y profesional como para pasar a la Fase 3.
 
-La IA es Groq (Llama 3 70B / 8B) por defecto, con fallback al resto de
-providers de AIManager si Groq falla o no está disponible.
+Cadena de fallback usada (definida en src/services/task_chains.py):
+    Cerebras 8B → Groq 70B → Groq 8B → Gemini Flash → User Own
 """
 from __future__ import annotations
 
@@ -17,60 +17,94 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from src.services.ai_manager import get_ai_manager
+from src.services.ai_manager import complete_for_task
+from src.services.task_chains import TASK_VALIDATION
 
 
 # ─────────────────────────────────────────────────────────────────────
-#  Prompt del Auditor
+#  Prompt del Auditor (reescrito en versión profesional)
 # ─────────────────────────────────────────────────────────────────────
 
 _JUDGE_SYSTEM_PROMPT = """\
 ROL
-Eres un Auditor de Calidad y Relevancia Web. Tu misión es actuar como
-el último filtro de seguridad y pertinencia antes de procesar un
-dominio.
+Eres "Domain Relevance Auditor", un auditor automático de webs cuya
+única función es decidir, en una sola palabra, si un dominio concreto
+debe pasar a la fase de extracción de contactos del pipeline o ser
+descartado. Tu juicio es la última puerta antes de gastar recursos en
+ese dominio, así que es vital que aciertes el SI, pero también que no
+te pongas tan duro que descartes webs que claramente encajan.
 
 OBJETIVO
-Determinar si el dominio analizado cumple con los estándares de
-fiabilidad técnica y, sobre todo, si encaja con la necesidad específica
-del usuario.
+Decidir SI / NO mirando si el dominio:
+  (a) encaja con la necesidad del usuario,
+  (b) parece técnicamente fiable y activo, y
+  (c) presenta el aspecto mínimo de un negocio real.
 
-CONTEXTO DE ENTRADA (VARIABLES)
-Para tomar tu decisión, dispones de:
-1. [Prompt del usuario / prompt creado por la IA] — describe la web
-   ideal o el comprador ideal del producto. Es tu métrica principal de
-   éxito.
-2. [HTML de la web] — contenido y estructura visual del sitio,
-   resumido en formato Markdown.
-3. [Análisis Wappalyzer / ADN] — tecnologías detectadas (puede estar
-   vacío si la fase no se activó o si no se encontraron evidencias).
-4. [Análisis PageSpeed] — salud técnica y seguridad (puede estar vacío
-   si la fase no se activó o si la API falló).
+ENTRADAS QUE RECIBIRÁS
+1. [PROMPT DEL USUARIO]
+   La descripción del tipo de web que se busca. En modo Producto, este
+   prompt lo ha generado la IA a partir del producto del usuario y
+   describe el COMPRADOR IDEAL. Es tu vara de medir principal.
 
-CRITERIOS DE DECISIÓN
-Responderás "SI" únicamente si se cumplen estas tres condiciones:
+2. [DOMINIO ANALIZADO]
+   El dominio que estás auditando.
 
-  · Relevancia: el contenido del HTML y las tecnologías detectadas
-    coinciden con lo que el usuario solicitó en su prompt. No seas
-    super estricto: estás filtrando para un software automatizado, no
-    quieres bloquear webs que claramente encajan aunque no coincidan
-    al 100% con cada palabra del prompt.
+3. [HTML DE LA WEB — formato Markdown]
+   Resumen estructurado del contenido visible: dominio, idioma, título,
+   meta descripción, og:type / og:description, secciones de navegación,
+   H1 y H2, schema.org / JSON-LD, CTAs, footer y body limpio.
+   Si una sub-sección viene "(no ejecutado para este dominio)" o
+   vacía, NO la penalices: simplemente no hay datos de esa señal.
 
-  · Fiabilidad: la web no presenta señales de abandono, errores
-    críticos de servidor o vulnerabilidades de seguridad graves
-    según PageSpeed.
+4. [ANÁLISIS WAPPALYZER / ADN]
+   Tecnologías detectadas en el sitio (CMS, ecommerce, CRM, pixeles,
+   chat, scripts de terceros, etc.) y, cuando el prompt pedía
+   tecnologías concretas, la confirmación SI/NO para cada una.
+   Puede venir vacío si la fase técnica no se activó.
 
-  · Profesionalismo: el sitio tiene una estructura mínima que
-    demuestra que es una entidad activa y no un dominio aparcado
-    (parking) o un template vacío.
+5. [ANÁLISIS PAGESPEED]
+   Salud técnica del sitio: scores Lighthouse (perf/SEO/accesibilidad/
+   best practices), Core Web Vitals reales (CrUX) e indicadores
+   relevantes. Puede venir vacío si la fase no se activó o si la API
+   falló (esto NO es motivo de descarte).
 
-Responderás "NO" si el sitio es irrelevante para el usuario, inseguro
-o técnicamente deficiente.
+CRITERIOS — TODOS deben cumplirse para responder "SI"
 
-REGLA DE ORO DE SALIDA (SIN EXCEPCIONES)
-Tu respuesta debe ser exclusivamente UNA palabra: "SI" o "NO".
-Está estrictamente prohibido añadir explicaciones, puntuaciones,
-comentarios o cualquier tipo de formato adicional.
+  · RELEVANCIA (peso alto). El contenido del HTML y las tecnologías
+    detectadas son CLARAMENTE compatibles con lo que el usuario pidió.
+    Razona con el contexto, no con coincidencia literal: si el prompt
+    dice "clínica dental en Madrid" y el HTML es de "Centro Odontológico
+    Sánchez · Madrid" → SI, aunque no diga "clínica" exactamente.
+    Tolera variaciones de idioma, sinónimos y nichos cercanos.
+    Si el prompt exigía una tecnología concreta y los hallazgos
+    técnicos la confirman como NO presente → eso pesa fuerte contra.
+
+  · FIABILIDAD (peso medio). El sitio no muestra señales de abandono
+    grave ni vulnerabilidades de seguridad serias detectadas por
+    PageSpeed (HTTPS roto, libs JS con CVE conocidos en
+    best_practices/security). Una performance baja o un SEO mediocre
+    NO son motivo de descarte salvo que el prompt lo pidiera
+    explícitamente.
+
+  · PROFESIONALISMO (peso medio). La web tiene una estructura mínima
+    de negocio activo: navegación con secciones reales, algún H1/H2
+    informativo, contenido en el body, footer con datos legales o
+    secciones tipo "Contacto / Sobre nosotros / Servicios". DESCARTA
+    si parece un dominio aparcado, una landing vacía de plantilla,
+    un sitio "Coming soon", un error masivo o una página de redirección
+    a un marketplace.
+
+REGLA ANTI-BLOQUEO (CRUCIAL)
+Este filtro corre dentro de un software automatizado. Si te pones
+demasiado estricto el sistema se quedará sin dominios y fallará. En
+casos AMBIGUOS — encaja "más o menos" y el sitio se ve normal — la
+respuesta correcta es "SI". Reserva el "NO" para los casos en los que
+una persona razonable también lo descartaría.
+
+REGLA DE ORO DE SALIDA — SIN EXCEPCIONES
+Tu respuesta debe ser EXACTAMENTE una palabra: "SI" o "NO".
+Está prohibido añadir explicaciones, comillas, puntuación,
+comentarios, traducciones o cualquier otro carácter.
 """
 
 
@@ -252,18 +286,25 @@ def judge_domain(
     if relax_level >= 1:
         system += (
             "\n\nMODO DE RELAJACIÓN ACTIVO (nivel "
-            f"{relax_level}). Estás filtrando para un software que lleva "
-            "tiempo sin encontrar webs suficientes. Sé MENOS estricto: "
-            "responde NO solo si la web es claramente irrelevante para "
-            "el prompt o tiene problemas técnicos graves. En caso de "
-            "duda, responde SI."
+            f"{relax_level}). El pipeline lleva tiempo sin encontrar "
+            "dominios suficientes — sé MÁS PERMISIVO: responde NO solo "
+            "si la web es CLARAMENTE irrelevante para el prompt o tiene "
+            "problemas técnicos GRAVES. En caso de duda, responde SI."
         )
     user_msg = _build_user_prompt(user_prompt, domain, html_markdown,
                                   tech_summary, ps_summary)
 
     try:
-        ai = get_ai_manager()
-        response = ai.complete(prompt=user_msg, system_prompt=system)
+        # La validación NO es JSON — desactivamos json_mode para no meter
+        # el system prompt de "responde solo JSON" que confundiría al
+        # modelo. Cadena de fallback: TASK_VALIDATION
+        # (Cerebras 8B → Groq 70B → Groq 8B → Gemini → User Own).
+        response = complete_for_task(
+            TASK_VALIDATION,
+            prompt=user_msg,
+            system_prompt=system,
+            json_mode=False,
+        )
     except Exception as exc:
         return JudgeVerdict(
             passed=False,

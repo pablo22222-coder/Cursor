@@ -20,7 +20,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from src.services.ai_manager import get_ai_manager
+from src.services.ai_manager import complete_for_task
+from src.services.task_chains import TASK_PROMPT_ANALYSIS
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -105,7 +106,11 @@ class ProductAnalyzer:
     """
 
     def __init__(self):
-        self._ai = get_ai_manager()
+        # ProductAnalyzer no espera JSON sino texto plano (un prompt).
+        # Para mantener el contrato OpenAI-compatible y la cadena de
+        # fallback unificada, usamos complete_for_task en cada llamada
+        # con json_mode=False.
+        pass
 
     def analyze(self, product_description: str) -> ProductAnalysis:
         """
@@ -117,9 +122,11 @@ class ProductAnalyzer:
 
         user_msg = _USER_TEMPLATE.format(product_description=product_description.strip())
 
-        response = self._ai.complete(
+        response = complete_for_task(
+            TASK_PROMPT_ANALYSIS,
             prompt=user_msg,
             system_prompt=_SYSTEM_PROMPT,
+            json_mode=False,   # devuelve UNA línea de texto, no JSON
         )
 
         if response.success and response.text.strip():

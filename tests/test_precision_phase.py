@@ -205,12 +205,13 @@ class TestJudgeParser(unittest.TestCase):
     def test_judge_with_mocked_ai(self):
         from src.services.providers.base_provider import AIResponse
 
-        class _StubAI:
-            def complete(self, prompt, system_prompt=""):
-                return AIResponse(text="SI", provider="stub", model="stub")
+        def fake_complete(task, prompt, system_prompt="", *, json_mode=True):
+            return AIResponse(text="SI", provider="stub", model="stub")
 
-        with patch("src.web_analyzer.precision.precision_judge.get_ai_manager",
-                   return_value=_StubAI()):
+        with patch(
+            "src.web_analyzer.precision.precision_judge.complete_for_task",
+            side_effect=fake_complete,
+        ):
             v = judge_domain(
                 user_prompt="ecommerce de e-bikes",
                 domain="acme.com",
@@ -226,12 +227,13 @@ class TestJudgeParser(unittest.TestCase):
     def test_judge_no_response(self):
         from src.services.providers.base_provider import AIResponse
 
-        class _StubAI:
-            def complete(self, prompt, system_prompt=""):
-                return AIResponse(text="NO", provider="stub", model="stub")
+        def fake_complete(task, prompt, system_prompt="", *, json_mode=True):
+            return AIResponse(text="NO", provider="stub", model="stub")
 
-        with patch("src.web_analyzer.precision.precision_judge.get_ai_manager",
-                   return_value=_StubAI()):
+        with patch(
+            "src.web_analyzer.precision.precision_judge.complete_for_task",
+            side_effect=fake_complete,
+        ):
             v = judge_domain(
                 user_prompt="x", domain="a.com", html_markdown="x",
             )
