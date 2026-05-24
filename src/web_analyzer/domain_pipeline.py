@@ -202,10 +202,14 @@ class DomainPipelineOrchestrator:
         for t in threads:
             t.join()
 
-        # Ordenar por confianza descendente
+        # Ordenar por confianza descendente y CAPAR EXACTAMENTE a
+        # max_results. Si por una race condition entre workers se
+        # quedaron 1-2 dominios extra al acumular (3 workers terminando
+        # a la vez justo cuando el contador llegaba al límite), aquí los
+        # descartamos quedándonos con los mejores por confidence.
         with self._results_lock:
             self._results.sort(key=lambda x: x.get("confidence", 0), reverse=True)
-            return list(self._results)
+            return list(self._results[: self.max_results])
 
     # ------------------------------------------------------------------
     # Bucle principal de cada worker
