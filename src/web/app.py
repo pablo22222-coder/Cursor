@@ -188,6 +188,24 @@ def create_app():
     
     # ── Lógica central de búsqueda (compartida por /api/search y /api/search/product) ──
 
+    def _coerce_max_results(value, default: int = 20, hard_cap: int = 100) -> int:
+        """
+        Normaliza el max_results recibido del cliente.
+
+        - Si no es entero válido → default.
+        - Si es < 1 → 1.
+        - Si es > hard_cap → hard_cap (límite duro a 100 por seguridad).
+        """
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            return default
+        if n < 1:
+            return 1
+        if n > hard_cap:
+            return hard_cap
+        return n
+
     def _launch_search(prompt: str, max_results: int, extract_fields: list,
                        fast_mode: bool, source_label: str = ""):
         """
@@ -196,6 +214,13 @@ def create_app():
         `source_label` se muestra en el status para indicar el modo activo.
         """
         extract_contacts = len(extract_fields) > 0
+
+        # Buffer de candidatos Serper. Antes era *3 pero con el filtrado
+        # estricto del modo precisión (score >= 60, QuickCheck, juez SI/NO,
+        # gate de completitud) se nos quedaba corto y el sistema devolvía
+        # menos dominios de los pedidos. Subimos a *6 con un suelo de 60
+        # para reducir drásticamente el undershoot.
+        candidate_buffer = max(max_results * 6, 60)
 
         def run_search():
             search_state["is_searching"] = True
@@ -251,11 +276,19 @@ def create_app():
                 }
 
                 # ── PASO 1: Obtener candidatos con Serper ─────────────────
-                search_state["status"] = f"{label}Buscando con {len(intent.search_queries)} queries..."
+                # Pedimos un buffer generoso para que tras el filtrado
+                # estricto del pipeline aún queden suficientes candidatos
+                # que pasen y se alcance exactamente max_results.
+                search_state["status"] = (
+                    f"{label}Buscando con {len(intent.search_queries)} queries..."
+                )
                 searcher = SerperSearch()
-                search_results = searcher.search(intent, max_results=max_results * 3)
+                search_results = searcher.search(intent, max_results=candidate_buffer)
                 search_state["progress"] = 35
-                search_state["status"] = f"Candidatos: {len(search_results)} — Lanzando 3 workers..."
+                search_state["status"] = (
+                    f"Candidatos: {len(search_results)} "
+                    f"(objetivo: {max_results}) — Lanzando 3 workers..."
+                )
 
                 if not search_results:
                     search_state["status"] = "No se encontraron resultados"
@@ -308,6 +341,13 @@ def create_app():
 
                 final_results = orchestrator.run(search_results)
 
+                # Red de seguridad: el orquestador ya capa a max_results
+                # internamente, pero hacemos otra slice aquí para que
+                # ningún cambio futuro en el pipeline pueda romper esta
+                # garantía de "siempre exactamente lo que pidió el usuario".
+                if len(final_results) > max_results:
+                    final_results = final_results[:max_results]
+
                 if not final_results:
                     search_state["status"] = "No se encontraron webs del tipo solicitado"
                     search_state["progress"] = 100
@@ -315,7 +355,20 @@ def create_app():
                     return
 
                 search_state["results"] = final_results
-                search_state["status"] = f"✓ Completado: {len(final_results)} dominios encontrados"
+                if len(final_results) < max_results:
+                    # Reportamos honestamente que se devolvieron menos:
+                    # el pipeline agotó la cola de candidatos sin alcanzar
+                    # el objetivo (todos los disponibles que pasaron el
+                    # filtro están ya en la lista).
+                    search_state["status"] = (
+                        f"⚠ Completado: {len(final_results)} dominios "
+                        f"encontrados (pediste {max_results}; se agotó la "
+                        f"lista de candidatos que pasaron todos los filtros)"
+                    )
+                else:
+                    search_state["status"] = (
+                        f"✓ Completado: {len(final_results)} dominios encontrados"
+                    )
                 search_state["progress"] = 100
                 print(f"[DEBUG] Final JSON Payload: {len(final_results)} items")
 
@@ -342,7 +395,7 @@ def create_app():
 
         data = request.json
         prompt = data.get('prompt', '').strip()
-        max_results = data.get('max_results', 20)
+        max_results = _coerce_max_results(data.get('max_results'), default=20)
         extract_fields = data.get('extract_fields', ['email'])
         extraction_mode = data.get('extraction_mode', 'precise')
         fast_mode = extraction_mode == 'fast'
@@ -368,7 +421,7 @@ def create_app():
 
         data = request.json
         product_description = data.get('product_description', '').strip()
-        max_results = data.get('max_results', 20)
+        max_results = _coerce_max_results(data.get('max_results'), default=20)
         extract_fields = data.get('extract_fields', ['email'])
         extraction_mode = data.get('extraction_mode', 'precise')
         fast_mode = extraction_mode == 'fast'

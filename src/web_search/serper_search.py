@@ -19,8 +19,11 @@ from urllib.parse import urlparse
 
 from config.settings import get_settings
 
-# Resultados máximos por query individual (evita consumir toda la cuota en una sola)
-RESULTS_PER_QUERY = 10
+# Resultados máximos por query individual. Subido de 10 a 20 para
+# reducir el undershoot del pipeline: con dedup + blacklist + filtros
+# de snippet, 10/query a menudo dejaba un buffer corto para que el
+# pipeline pudiera alcanzar el max_results pedido por el usuario.
+RESULTS_PER_QUERY = 20
 
 
 @dataclass
