@@ -47,52 +47,177 @@ from src.services.task_chains import (
 
 _ANALYSIS_SYSTEM_PROMPT = """\
 Eres "Prompt Analyst", un analista sénior de inteligencia comercial \
-especializado en transformar descripciones libres del usuario en una \
-ficha técnica estructurada y machine-readable.
+(OSINT + Lead Generation) especializado en transformar descripciones \
+libres del usuario en una ficha técnica estructurada y machine-readable.
 
 Tu único trabajo es DECODIFICAR el prompt y devolver SUS PARÁMETROS en \
 un JSON con un schema fijo. NO generas queries de Google, NO escribes \
-copys, NO razonas por escrito — solo extraes datos.
+copys, NO razonas por escrito fuera del JSON — solo extraes datos.
 
+═══════════════════════════════════════════════════════════════════════
 PRINCIPIOS
+═══════════════════════════════════════════════════════════════════════
 
-  1. Distingue siempre WEB-TARGET vs WEB-AUDIENCE.
-     · WEB-TARGET: el usuario pide "encuéntrame webs que SON X".
-     · WEB-AUDIENCE: el usuario describe el comprador ideal de su
-       producto. En ambos casos tu output describe la web a encontrar.
+  1. WEB-TARGET vs WEB-AUDIENCE (no te confundas):
+     · WEB-TARGET (modo prompt): el usuario pide "encuéntrame webs que
+       SON X" → describes esas webs.
+     · WEB-AUDIENCE (modo producto): el usuario describe a su comprador
+       ideal (otro módulo ya lo tradujo a "describe la web compradora")
+       → describes esas webs igual.
+     En AMBOS casos tu output describe el TIPO DE WEB a encontrar.
 
-  2. Sé minucioso pero conservador.
-     · Si un parámetro NO está claro en el prompt, devuélvelo como null
-       o lista vacía. NO inventes ubicaciones, tecnologías o tamaños.
-     · Si el usuario dice "sin Shopify" o "que no use X" → mete X en
-       ``must_not``. Si dice "con Klaviyo" o "que use Y" → en
-       ``must_have``. Usa nombres canónicos (Shopify, Klaviyo,
-       WordPress, Google Analytics, HubSpot, Stripe...). Para
-       categorías genéricas usa minúsculas: crm, cms, analytics,
-       email_marketing, live_chat, payment, ecommerce.
+  2. Conservador con lo que no está. Si un parámetro NO está claro en
+     el prompt, devuélvelo como null o lista vacía. NO inventes
+     ubicaciones, tecnologías, tamaños o idiomas. Solo extrae lo que
+     el usuario ha dicho explícitamente o lo que es trivialmente
+     deducible (ej.: "tienda online de bicicletas en Barcelona" → city
+     = "Barcelona", country = "ES").
 
-  3. Indicadores de validación y exclusión deben ser cadenas concretas
-     que un parser pueda buscar en el HTML: textos visibles, clases
-     CSS comunes, patrones de URL, terminología del sector, palabras
-     que confirmen ("añadir al carrito", "pedir presupuesto",
-     "pricing") o que descarten ("qué es", "definición", "wikipedia",
-     "comparativa").
+  3. Negaciones y requisitos tecnológicos:
+     · "sin Shopify", "que no use X", "no shopify" → en ``must_not``.
+     · "con Klaviyo", "que use Y", "usando Stripe" → en ``must_have``.
+     · Usa nombres CANÓNICOS para que casen con Wappalyzer/BD pública:
+       Shopify, WooCommerce, Magento, PrestaShop, BigCommerce,
+       WordPress, Drupal, Joomla, Wix, Webflow, Squarespace, Ghost,
+       Klaviyo, Mailchimp, ActiveCampaign, Brevo, ConvertKit, HubSpot,
+       Salesforce, Pipedrive, Zoho, Stripe, PayPal, Redsys, Intercom,
+       Drift, Tidio, Crisp, Zendesk, Google Analytics, Hotjar,
+       Facebook Pixel, Google Tag Manager, TikTok Pixel, reCAPTCHA,
+       React, Vue, Angular, Next.js, Nuxt.
+     · Para categorías GENÉRICAS (no marca concreta) usa minúsculas:
+       crm | cms | analytics | email_marketing | live_chat | payment |
+       ecommerce | seo.
 
-  4. ``business_type`` debe pertenecer al enum cerrado:
-     ecommerce | saas | agencia | consultoria | marketplace |
-     directorio | blog | app | plataforma | servicio_local |
-     corporativa | portfolio | otro.
+  4. Indicadores HTML (validation_indicators / exclusion_indicators):
+     · Cadenas CONCRETAS que un parser pueda buscar en el HTML.
+     · Validation: textos UI / clases CSS / patrones de URL /
+       terminología del sector / señales de empresa real ("añadir al
+       carrito", "pedir presupuesto", "/precio", "/contacto",
+       "founded in", "nuestro equipo", "free trial", "checkout",
+       "case studies").
+     · Exclusion: señales de contenido informativo / directorio /
+       comparativa / wiki ("qué es", "guía completa", "wikipedia",
+       "comparativa", "top 10", "vs", "definición", "ranking").
 
-  5. ``language`` ∈ { "es", "en", "ambos" }.
+  5. ``business_type`` (enum cerrado, elige UNO):
+       ecommerce       — tienda online que VENDE productos físicos/digitales
+       saas            — software como servicio con login y pricing recurring
+       agencia         — servicios profesionales prestados por equipo (mkt, diseño, dev…)
+       consultoria     — asesoría / consultoría experta (legal, fiscal, estrategia…)
+       marketplace     — múltiples vendedores en una sola plataforma
+       directorio      — listado/catálogo de terceros (Páginas Amarillas estilo)
+       blog            — sitio editorial / media / revista
+       app             — aplicación móvil con landing
+       plataforma      — herramienta o servicio web no-SaaS típico
+       servicio_local  — negocio físico con presencia local (clínica, peluquería, restaurante…)
+       corporativa     — sitio institucional de empresa grande/mediana
+       portfolio       — portfolio individual o de freelance
+       otro            — solo si ninguno encaja claramente
+
+  6. ``language`` ∈ { "es", "en", "ambos" }.
      ``target_audience`` ∈ { "B2B", "B2C", "ambos", null }.
+     Si el usuario no lo especifica explícitamente y se puede deducir
+     con confianza alta del sector, lo deduces (ej. "tienda online de
+     juguetes" → B2C; "software CRM para agencias" → B2B). Si no se
+     puede deducir con confianza, usa null.
 
-  6. Si el prompt está limpio y bien expresado, ``prompt_depurado``
-     puede ser idéntico al original. Si está mal redactado, ofrece
-     una versión equivalente sin ambigüedades pero SIN CAMBIAR LA
-     INTENCIÓN.
+  7. ``search_strategy`` (nueva): UNA frase que resuma el ángulo de
+     ataque que un buscador OSINT seguiría para encontrar estas webs.
+     Esta frase la usará después el generador de queries.
+     Ejemplos:
+       · "footprint técnico de Shopify + slang ecommerce de
+         bicicletas + geo Barcelona/España, excluir blogs y rankings"
+       · "señales de empresa B2B con CRM no propio + sector marketing
+         digital + geografía hispana, excluir directorios"
 
-FORMATO DE SALIDA — JSON ESTRICTO, sin comentarios, sin texto antes ni \
-después, sin bloques markdown. Empieza con `{` y termina con `}`.\
+  8. ``sector_keywords`` (nueva): 3-8 términos REALES del argot del
+     sector que solo usaría un profesional del nicho, no un
+     articulista. Sirven para que las queries usen vocabulario nativo.
+     Ejemplos:
+       · Bicicletas ebike: ["e-bike", "ciclismo urbano", "MTB",
+         "kit conversión", "asistencia eléctrica"]
+       · Clínica dental: ["ortodoncia invisible", "implantes
+         all-on-4", "endodoncia", "estética dental", "Invisalign"]
+
+  9. ``prompt_depurado``: si el prompt está limpio, idéntico al
+     original; si tiene ambigüedades, una versión clara SIN cambiar
+     la intención.
+
+═══════════════════════════════════════════════════════════════════════
+EJEMPLOS — entrada → salida JSON exacta
+═══════════════════════════════════════════════════════════════════════
+
+EJEMPLO 1
+Entrada: "tienda online de bicicletas eléctricas en Barcelona con Shopify, sin wix"
+Salida:
+{
+  "prompt_depurado": "tienda online de bicicletas eléctricas en Barcelona, plataforma Shopify, no Wix",
+  "business_type": "ecommerce",
+  "product_category": "bicicletas eléctricas",
+  "service_type": null,
+  "niche": "movilidad urbana eléctrica",
+  "location": {"country": "ES", "region": "Cataluña", "city": "Barcelona"},
+  "target_audience": "B2C",
+  "language": "es",
+  "must_have": ["Shopify"],
+  "must_not": ["Wix"],
+  "validation_indicators": ["añadir al carrito", "checkout", "envío", "stock", "tienda online", "powered by Shopify"],
+  "exclusion_indicators": ["qué es una ebike", "guía completa", "comparativa", "mejores e-bikes", "ranking"],
+  "confidence": 0.92,
+  "analysis_notes": "Ecommerce con plataforma específica y ubicación concreta — caso típico de footprint Shopify",
+  "search_strategy": "footprint de Shopify + slang ebike + geo Barcelona/España, excluir blogs/rankings",
+  "sector_keywords": ["e-bike", "bicicleta urbana", "asistencia eléctrica", "ciclismo eléctrico", "MTB eléctrica"]
+}
+
+EJEMPLO 2
+Entrada: "agencias de marketing digital en Latinoamérica que necesiten un CRM propio"
+Salida:
+{
+  "prompt_depurado": "agencias de marketing digital en Latinoamérica sin CRM propio",
+  "business_type": "agencia",
+  "product_category": null,
+  "service_type": "marketing digital",
+  "niche": "marketing digital",
+  "location": {"country": null, "region": "Latinoamérica", "city": null},
+  "target_audience": "B2B",
+  "language": "es",
+  "must_have": [],
+  "must_not": ["crm"],
+  "validation_indicators": ["nuestros servicios", "case studies", "casos de éxito", "agencia de marketing", "presupuesto", "auditoría gratuita", "equipo"],
+  "exclusion_indicators": ["qué es marketing digital", "guía", "wikipedia", "comparativa de agencias", "top agencias"],
+  "confidence": 0.85,
+  "analysis_notes": "Sector agencia con negación de tecnología (categoría CRM); geografía regional sin país concreto",
+  "search_strategy": "señales de agencia B2B + sector marketing digital + geo LATAM (.mx, .co, .ar) + sin huella de CRM, excluir contenido informativo",
+  "sector_keywords": ["agencia marketing digital", "performance marketing", "media buying", "SEO/SEM", "estrategia digital", "growth marketing"]
+}
+
+EJEMPLO 3
+Entrada: "clínicas dentales en Madrid con web propia que tengan reservas online"
+Salida:
+{
+  "prompt_depurado": "clínicas dentales en Madrid con web propia y sistema de reservas online",
+  "business_type": "servicio_local",
+  "product_category": null,
+  "service_type": "odontología",
+  "niche": "clínica dental",
+  "location": {"country": "ES", "region": "Madrid", "city": "Madrid"},
+  "target_audience": "B2C",
+  "language": "es",
+  "must_have": [],
+  "must_not": [],
+  "validation_indicators": ["pedir cita", "reservar cita", "/contacto", "tratamientos", "implantes", "ortodoncia", "clínica dental", "doctor", "doctora"],
+  "exclusion_indicators": ["qué es", "wikipedia", "directorio de clínicas", "doctoralia", "mejores clínicas", "ranking", "comparativa"],
+  "confidence": 0.9,
+  "analysis_notes": "Negocio local con widget de reservas; geo Madrid; descartar directorios verticales como Doctoralia",
+  "search_strategy": "negocios locales con presencia web propia + widget de reservas + geo Madrid, excluir directorios verticales (Doctoralia, Top doctors) y rankings",
+  "sector_keywords": ["clínica dental", "odontología", "ortodoncia invisible", "implantes dentales", "estética dental", "Invisalign", "endodoncia"]
+}
+
+═══════════════════════════════════════════════════════════════════════
+FORMATO DE SALIDA
+═══════════════════════════════════════════════════════════════════════
+JSON ESTRICTO, sin comentarios, sin texto antes ni después, sin bloques \
+markdown. Empieza con `{` y termina con `}`.\
 """
 
 _ANALYSIS_USER_TEMPLATE = """\
@@ -104,30 +229,30 @@ prompt. Si un campo no tiene información, devuelve null o lista vacía \
 (NO lo inventes).
 
 {{
-  "prompt_depurado": "string · versión clara y unívoca del prompt",
-  "business_type":   "ecommerce | saas | agencia | consultoria | marketplace | directorio | blog | app | plataforma | servicio_local | corporativa | portfolio | otro",
-  "product_category": "string o null",
-  "service_type":    "string o null",
-  "niche":           "string o null",
+  "prompt_depurado":   "string · versión clara y unívoca del prompt",
+  "business_type":     "ecommerce | saas | agencia | consultoria | marketplace | directorio | blog | app | plataforma | servicio_local | corporativa | portfolio | otro",
+  "product_category":  "string o null",
+  "service_type":      "string o null",
+  "niche":             "string o null",
   "location": {{
-    "country": "código ISO-3166-1 alfa-2 o null",
-    "region":  "string o null",
-    "city":    "string o null"
+    "country":         "código ISO-3166-1 alfa-2 o null",
+    "region":          "string o null",
+    "city":            "string o null"
   }},
-  "target_audience": "B2B | B2C | ambos | null",
-  "language":        "es | en | ambos",
-  "must_have":       ["lista de strings — tecnologías/atributos OBLIGATORIOS"],
-  "must_not":        ["lista de strings — tecnologías/atributos PROHIBIDOS"],
+  "target_audience":   "B2B | B2C | ambos | null",
+  "language":          "es | en | ambos",
+  "must_have":         ["lista de strings · tecnologías/atributos OBLIGATORIOS, nombres canónicos"],
+  "must_not":          ["lista de strings · tecnologías/atributos PROHIBIDOS, nombres canónicos"],
   "validation_indicators": [
-    "palabras o patrones HTML que CONFIRMAN que una web encaja"
+    "cadenas HTML CONCRETAS que CONFIRMAN que una web encaja (textos UI, clases CSS, terminología del sector)"
   ],
-  "exclusion_indicators": [
-    "palabras o patrones HTML que DESCARTAN una web (informativos, \
-directorios, comparativas, contenido genérico, etc.)"
+  "exclusion_indicators":  [
+    "cadenas HTML CONCRETAS que DESCARTAN una web (informativos, directorios, comparativas, rankings)"
   ],
-  "confidence":     0.0,
-  "analysis_notes": "una frase con la estrategia clave (de dónde sale \
-el sector, qué tecnologías son críticas, qué excluir, etc.)"
+  "confidence":        0.0,
+  "analysis_notes":    "una frase con la estrategia clave (sector, tecnologías críticas, qué excluir)",
+  "search_strategy":   "UNA frase con el ángulo de ataque OSINT que seguiría el generador de queries",
+  "sector_keywords":   ["3 a 8 términos REALES del argot del sector — vocabulario que solo usa un profesional del nicho"]
 }}\
 """
 
@@ -137,62 +262,128 @@ el sector, qué tecnologías son críticas, qué excluir, etc.)"
 # ─────────────────────────────────────────────────────────────────────────────
 
 _QUERIES_SYSTEM_PROMPT = """\
-Eres "Query Strategist", un experto OSINT en formular dorks de Google \
-quirúrgicos para descubrir webs de empresas reales (no artículos, no \
-directorios, no comparativas).
+Eres "Query Strategist", un experto OSINT y lead-gen que diseña dorks de \
+Google quirúrgicos para descubrir webs de empresas reales (NO artículos, \
+NO directorios, NO comparativas, NO rankings, NO contenido informativo).
 
 Tu único trabajo es generar las QUERIES — no analizas semántica, no \
 clasificas, no devuelves metadata. Solo queries listas para Serper.
 
+═══════════════════════════════════════════════════════════════════════
 PRINCIPIOS
+═══════════════════════════════════════════════════════════════════════
 
-  1. El objetivo es siempre **encontrar webs que SON el negocio \
-     descrito**, no webs que hablen sobre él. Cada query debe optimizar \
-     ese filtro.
+  1. INTENCIÓN ÚNICA: encontrar webs que SON el negocio descrito, no
+     webs que HABLAN sobre él. Cada query debe optimizar ese filtro.
 
-  2. Diversidad y cobertura. Cada query debe atacar el problema desde \
-     un ángulo distinto: footprint técnico, señal comercial, slang del \
-     sector, operadores avanzados (intitle/inurl/site/-exclusion/ \
-     "frase exacta"/OR), señales de empresa real, long-tail, idioma \
-     local, ubicación, etc.
+  2. ESTRUCTURA DE DIVERSIDAD obligatoria (15 queries, NI más NI menos):
 
-  3. Operadores avanzados. Al menos 6 de las 15 queries deben usar uno \
-     o más operadores Google (intitle:, inurl:, "frase exacta", OR, \
-     -exclusion, site:). Sin abusar.
+     · 4 queries QUIRÚRGICAS (alta especificidad, operadores fuertes,
+       atacan un footprint claro o frase exacta del sector).
+     · 5 queries de FOOTPRINT TÉCNICO o SECTOR (slang real del nicho,
+       generator/powered-by, terminología que solo usa un profesional
+       — no un periodista).
+     · 4 queries COMERCIALES (señales de empresa real: pricing,
+       presupuesto, contacto, equipo, "trabaja con nosotros",
+       free trial, request demo).
+     · 2 queries AMPLIAS (long-tail / catch-all que pillen lo que las
+       específicas no pillaron, sin operadores agresivos).
 
-  4. Negaciones. Si el prompt o el análisis traen ``must_not``, NO \
-     menciones esas tecnologías en las queries. En su lugar, busca \
-     alternativas o usa "-shopify" como filtro.
+  3. OPERADORES Google permitidos (usa al menos 7 de 15 con operadores):
 
-  5. Geografía / idioma. Si hay ``location`` o ``language``, al menos \
-     una query debe localizarla (TLD .es / .com.mx, ciudad, slang \
-     regional). Si no hay ubicación, NO inventes ninguna.
+       intitle:"…"     · inurl:"…"   · site:tld
+       "frase exacta"  · OR          · AND (implícita; evita la palabra)
+       -exclusión      · filetype:   · cache: (raramente útil)
 
-  6. Cada query debe pegarse tal cual en Google y devolver resultados \
-     reales. NO uses operadores que Google ya no soporta (allintitle:, \
-     inanchor: a veces, link:). Comillas dobles solo para frases \
-     exactas. Evita queries de más de 32 palabras (Google trunca).
+     PROHIBIDOS (Google ya no los soporta o son ruido):
+       allintitle:, allinurl:, link:, inanchor: en queries amplias.
 
-  7. NO escribas instrucciones, comentarios ni numeración dentro del \
-     array — solo las queries en sí.
+  4. NEGACIONES (must_not) — críticas:
+     · NUNCA menciones positivamente una tecnología que esté en
+       must_not. Usa "-shopify" si quieres filtrarlas explícitamente,
+       o busca alternativas directamente (p.ej. "woocommerce").
+
+  5. POSITIVOS (must_have) — críticas:
+     · Al menos 3 queries deben mencionar/atacar un must_have (p.ej.
+       footprint "powered by Shopify" o inurl:/shop o intitle:Klaviyo).
+
+  6. GEO / IDIOMA:
+     · Si el análisis trae location o language, al menos 2 queries
+       deben localizarla (TLD .es / .com.mx / .com.ar, ciudad, slang
+       regional). Si NO hay ubicación, NO inventes ninguna.
+
+  7. EXCLUSIONES INFORMATIVAS — defensivas (al menos 2 queries):
+     · Añade exclusiones del tipo:
+         -blog -"qué es" -wikipedia -"guía" -"comparativa"
+         -"top 10" -ranking -definición -tutorial
+     · Especialmente importante si el nicho tiene mucho contenido
+       editorial (ej. clínica dental, marketing digital, fintech).
+
+  8. CALIDAD DE LA QUERY:
+     · Cada query debe pegarse tal cual en Google y devolver
+       resultados de webs reales.
+     · Mínimo 3 palabras útiles. Máximo ~20-25 palabras (Google
+       trunca >32).
+     · NO duplicar queries casi-idénticas (ej. "tienda zapatos" y
+       "tiendas de zapatos" cuentan como una sola).
+     · NO incluyas instrucciones, comentarios, numeración ni
+       prefijos tipo "Query 1:" dentro del array.
+
+═══════════════════════════════════════════════════════════════════════
+EJEMPLO TRABAJADO — para que veas el nivel esperado
+═══════════════════════════════════════════════════════════════════════
+
+ENTRADA:
+  prompt_depurado: "tienda online de bicicletas eléctricas en Barcelona, plataforma Shopify, no Wix"
+  business_type: "ecommerce"
+  niche: "movilidad urbana eléctrica"
+  location: {"country":"ES","region":"Cataluña","city":"Barcelona"}
+  must_have: ["Shopify"]
+  must_not: ["Wix"]
+  search_strategy: "footprint de Shopify + slang ebike + geo Barcelona/España, excluir blogs/rankings"
+  sector_keywords: ["e-bike", "bicicleta urbana", "asistencia eléctrica", "ciclismo eléctrico"]
+
+SALIDA (15 queries diversas, sin Wix mencionado en positivo):
+  1. intitle:"tienda" "bicicletas eléctricas" Barcelona
+  2. "powered by Shopify" "e-bike" site:.es
+  3. inurl:"/products/" "bicicleta eléctrica" Barcelona
+  4. "ebike" "añadir al carrito" "Barcelona" OR "Cataluña"
+  5. "asistencia eléctrica" tienda online bicicletas España
+  6. "ciclismo urbano" Shopify Barcelona -blog -wikipedia
+  7. "MTB eléctrica" "envío" "stock" Barcelona
+  8. bicicletas eléctricas Barcelona "contacto" "showroom"
+  9. "comprar e-bike" Barcelona OR Madrid -"qué es" -"guía"
+  10. inurl:"/collections/" e-bike "Cataluña"
+  11. "checkout" "bicicleta eléctrica" site:.es
+  12. tienda bicicletas eléctricas Barcelona -ranking -"top 10" -comparativa
+  13. "powered by Shopify" "ebike" OR "e-bike" Cataluña
+  14. ebike "envío 24h" OR "envío gratis" Barcelona
+  15. tienda online bicicletas eléctricas Barcelona
+
+Fíjate cómo NINGUNA query menciona Wix (must_not), 3+ atacan Shopify
+(must_have), 4 llevan -exclusiones contra contenido informativo, hay
+slang del sector (e-bike, MTB eléctrica, asistencia eléctrica), y
+geo Barcelona/Cataluña aparece en varias.
+═══════════════════════════════════════════════════════════════════════
 
 FORMATO DE SALIDA — JSON estricto: { "search_queries": [ ... 15 strings ... ] }\
 """
 
 _QUERIES_USER_TEMPLATE = """\
-PROMPT DEL USUARIO:
+PROMPT DEL USUARIO (original):
 \"\"\"{prompt}\"\"\"
 
-ANÁLISIS PREVIO (puede venir vacío si el otro analista todavía no ha \
-terminado — en ese caso tira solo del prompt):
-
+ANÁLISIS ESTRUCTURADO del prompt (úsalo para anclar las queries):
 {analysis_block}
 
-Devuelve EXACTAMENTE 15 queries listas para Serper / Google. Cubre \
-ángulos distintos y respeta las negaciones del análisis. Usa \
-operadores avanzados en al menos 6 de las 15.
+Genera EXACTAMENTE 15 queries listas para Serper / Google siguiendo la \
+estructura de diversidad (4 quirúrgicas, 5 footprint/sector, 4 \
+comerciales, 2 amplias) descrita en el sistema. RESPETA las negaciones \
+(must_not) — no las menciones en positivo. USA los nombres canónicos \
+de must_have al atacar footprint. INCLUYE geo/idioma si el análisis lo \
+trae, NO inventes ubicación si no la trae.
 
-FORMATO de respuesta (JSON, sin nada más):
+FORMATO de respuesta (JSON, sin nada más, sin markdown):
 {{
   "search_queries": [
     "query 1",
@@ -340,27 +531,47 @@ class AIInterpreter:
         """
         Analiza el prompt y devuelve un SearchIntent completo.
 
-        Si ``precision_routing=True`` (por defecto), además consulta a la
-        IA las dos decisiones de routing de Fase 2 (Tech Scanner y
-        PageSpeed) en paralelo. En modo rápido pasa
-        ``precision_routing=False`` para evitar latencia innecesaria.
+        Flujo:
+
+          1. Lanza el análisis estructurado (TASK_PROMPT_ANALYSIS) y, en
+             paralelo, el routing de Fase 2 si está activo (también
+             TASK_PROMPT_ANALYSIS pero distintos prompts).
+          2. Cuando el análisis termina, lanza la generación de queries
+             (TASK_QUERY_GENERATION) con el contexto completo del
+             análisis — así las queries son MUCHO más precisas que
+             cuando antes corrían a ciegas en paralelo con el análisis.
+          3. Post-procesa las queries para garantizar:
+               · que respetan must_not (filtra las que mencionen tech
+                 prohibida en positivo),
+               · que no haya duplicadas casi-idénticas,
+               · y deduplica también validation/exclusion_indicators.
+
+        Si ``precision_routing=True`` (por defecto), las dos decisiones
+        de Fase 2 (Tech Scanner y PageSpeed) van en paralelo al
+        análisis. En modo rápido se desactiva para no añadir latencia.
         """
         if not user_prompt or not user_prompt.strip():
             return _local_analyze(user_prompt or "")
 
-        # Lanzamos analysis + queries en paralelo. El router de Fase 2
-        # también va en paralelo si está activo. Total: 2 o 3 hilos.
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        # ── Paso 1: análisis + routing en paralelo ───────────────────
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             fut_analysis = pool.submit(self._run_analysis, user_prompt)
-            fut_queries  = pool.submit(self._run_queries,  user_prompt)
             fut_routing  = (
                 pool.submit(self._run_precision_routing, user_prompt)
                 if precision_routing else None
             )
 
             analysis_data, analysis_provider = fut_analysis.result()
-            queries_list, queries_provider   = fut_queries.result()
-            routing                          = fut_routing.result() if fut_routing else None
+            routing = fut_routing.result() if fut_routing else None
+
+        # ── Paso 2: generación de queries CON contexto del análisis ──
+        # Sequential, no parallel, porque la calidad del prompt depende
+        # del análisis. Coste: +1 llamada (≈1-2s) de latencia. Beneficio:
+        # queries dramáticamente más precisas (slang del sector, geo,
+        # must_have/must_not aplicados correctamente).
+        queries_list, queries_provider = self._run_queries(
+            user_prompt, analysis_data=analysis_data,
+        )
 
         # ── Construir SearchIntent ───────────────────────────────────
         if not analysis_data:
@@ -369,8 +580,6 @@ class AIInterpreter:
                 "local de emergencia"
             )
             intent = _local_analyze(user_prompt)
-            # Si los queries SÍ fueron generados, reemplazamos las
-            # queries del local_analyze por las de la IA.
             if queries_list:
                 intent.search_queries = queries_list
                 intent.provider_used = f"{intent.provider_used}+{queries_provider}"
@@ -382,6 +591,20 @@ class AIInterpreter:
                 queries_override=queries_list,
                 queries_provider=queries_provider,
             )
+
+        # ── Post-procesado de queries e indicadores ──────────────────
+        intent.search_queries = _post_process_queries(
+            intent.search_queries,
+            must_not=intent.must_not,
+            sector_keywords=_extract_sector_keywords(analysis_data),
+            target_count=15,
+        )
+        intent.validation_indicators = _dedupe_keep_order(
+            intent.validation_indicators
+        )
+        intent.exclusion_indicators = _dedupe_keep_order(
+            intent.exclusion_indicators
+        )
 
         # ── Routing de Fase 2 (precisión) ────────────────────────────
         if routing is not None:
@@ -420,15 +643,24 @@ class AIInterpreter:
             )
             return None, getattr(resp, "provider", "error")
 
-    def _run_queries(self, user_prompt: str) -> tuple:
-        """Llama a la cadena TASK_QUERY_GENERATION para producir 15 queries."""
-        # En esta versión no esperamos al analysis: pasamos
-        # analysis_block vacío y dejamos que el query strategist tire
-        # del prompt directo. Esto permite ejecutar ambos en paralelo
-        # sin dependencias.
+    def _run_queries(
+        self,
+        user_prompt: str,
+        *,
+        analysis_data: Optional[Dict[str, Any]] = None,
+    ) -> tuple:
+        """
+        Llama a la cadena TASK_QUERY_GENERATION para producir 15 queries.
+
+        Si ``analysis_data`` no es None, se serializa como bloque de
+        contexto y se pasa al Query Strategist. Esto convierte el
+        prompt de "ciego" a "anclado en datos estructurados", lo que
+        sube drásticamente la calidad de las queries.
+        """
+        analysis_block = _format_analysis_block(analysis_data)
         msg = _QUERIES_USER_TEMPLATE.format(
             prompt=user_prompt[:2000],
-            analysis_block="(en paralelo — no disponible aún)",
+            analysis_block=analysis_block,
         )
         try:
             resp = complete_for_task(
@@ -529,6 +761,219 @@ _SKIP_QUERY_PREFIXES = (
     "si el prompt", "usa operadores", "lista de", "no uses", "mezcla",
     "incluye", "deben ser 15", "ejemplo:", "example:",
 )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Helpers nuevos: contexto del análisis y post-procesado de queries
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _format_analysis_block(analysis_data: Optional[Dict[str, Any]]) -> str:
+    """
+    Serializa los campos del análisis para que el Query Strategist los
+    use como contexto. Si no hay análisis, devuelve un placeholder.
+    Formato deliberadamente legible (no JSON puro) para que el modelo
+    lo absorba mejor.
+    """
+    if not analysis_data:
+        return "(no disponible — tira solo del prompt del usuario)"
+
+    parts: List[str] = []
+    pd = analysis_data.get("prompt_depurado") or ""
+    if pd:
+        parts.append(f"  prompt_depurado: {pd}")
+
+    bt = analysis_data.get("business_type")
+    if bt:
+        parts.append(f"  business_type:   {bt}")
+
+    for key in ("product_category", "service_type", "niche"):
+        v = analysis_data.get(key)
+        if v:
+            parts.append(f"  {key:<16} {v}")
+
+    loc = analysis_data.get("location") or {}
+    if isinstance(loc, dict) and any(loc.values()):
+        country = loc.get("country") or "?"
+        region  = loc.get("region")  or "?"
+        city    = loc.get("city")    or "?"
+        parts.append(f"  location:        country={country} · region={region} · city={city}")
+
+    ta = analysis_data.get("target_audience")
+    if ta:
+        parts.append(f"  target_audience: {ta}")
+
+    lang = analysis_data.get("language")
+    if lang:
+        parts.append(f"  language:        {lang}")
+
+    mh = analysis_data.get("must_have") or []
+    if isinstance(mh, list) and mh:
+        parts.append(f"  must_have:       {mh}")
+
+    mn = analysis_data.get("must_not") or []
+    if isinstance(mn, list) and mn:
+        parts.append(f"  must_not:        {mn}")
+
+    vi = analysis_data.get("validation_indicators") or []
+    if isinstance(vi, list) and vi:
+        parts.append(f"  validation_indicators: {vi[:10]}")
+
+    ei = analysis_data.get("exclusion_indicators") or []
+    if isinstance(ei, list) and ei:
+        parts.append(f"  exclusion_indicators:  {ei[:10]}")
+
+    strat = analysis_data.get("search_strategy") or ""
+    if strat:
+        parts.append(f"  search_strategy: {strat}")
+
+    sk = analysis_data.get("sector_keywords") or []
+    if isinstance(sk, list) and sk:
+        parts.append(f"  sector_keywords: {sk}")
+
+    return "\n".join(parts) if parts else "(análisis vacío)"
+
+
+def _extract_sector_keywords(analysis_data: Optional[Dict[str, Any]]) -> List[str]:
+    """Saca la lista sector_keywords si existe, normalizada."""
+    if not analysis_data:
+        return []
+    raw = analysis_data.get("sector_keywords") or []
+    if not isinstance(raw, list):
+        return []
+    return [str(x).strip() for x in raw if isinstance(x, str) and x.strip()]
+
+
+def _dedupe_keep_order(items: List[Any]) -> List[Any]:
+    """Quita duplicados (case-insensitive) preservando el orden original."""
+    out: List[Any] = []
+    seen: set = set()
+    for it in items or []:
+        key = str(it).strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(it)
+    return out
+
+
+# Stopwords ES + EN que NO discriminan una query de otra. Las quitamos en
+# la forma canónica para que "tienda online DE zapatos" y "tienda online
+# zapatos" se detecten como la misma query.
+_STOPWORDS_FOR_DEDUP = frozenset({
+    # Español
+    "de", "del", "la", "el", "los", "las", "un", "una", "unos", "unas",
+    "y", "o", "u", "que", "en", "con", "para", "por", "al", "a", "lo",
+    # Inglés
+    "of", "the", "a", "an", "and", "or", "to", "for", "in", "on", "with",
+    "from", "by",
+})
+
+
+def _normalize_query(q: str) -> str:
+    """
+    Reduce una query a su forma canónica para detectar near-duplicados.
+
+    Estrategia:
+      · Lowercase.
+      · Quita comillas y puntuación.
+      · Quita los OPERADORES (intitle:, inurl:, site:, …) — solo la
+        intención semántica importa.
+      · Quita stopwords cortas (de, la, el, of, the, …).
+      · Ordena tokens alfabéticamente y deduplica.
+
+    Resultado: dos queries con el mismo conjunto de tokens significativos
+    (ignorando orden, operadores y stopwords) se consideran duplicadas.
+    """
+    s = q.lower()
+    s = re.sub(r"[\"'`]", " ", s)
+    s = re.sub(r"\b(intitle|inurl|site|filetype|cache|or|and):", " ", s)
+    s = re.sub(r"[^\w\sáéíóúñü-]", " ", s)
+    tokens: List[str] = []
+    for t in s.split():
+        if len(t) <= 2:
+            continue
+        if t in _STOPWORDS_FOR_DEDUP:
+            continue
+        tokens.append(t)
+    return " ".join(sorted(set(tokens)))
+
+
+def _query_violates_must_not(q: str, must_not: List[str]) -> bool:
+    """
+    True si la query menciona en POSITIVO una tecnología de must_not.
+    "Positivo" = aparece sin el prefijo "-" (la sintaxis Google para
+    EXCLUIR). Si aparece como "-shopify" se considera ok (es un filtro).
+    """
+    if not must_not:
+        return False
+    q_lower = " " + q.lower() + " "
+    for tech in must_not:
+        if not isinstance(tech, str) or not tech.strip():
+            continue
+        t = tech.strip().lower()
+        if not t:
+            continue
+        # Si aparece como "-tech" o "-tech.com" lo consideramos OK
+        # (exclusión Google legítima).
+        if f" -{t}" in q_lower or f"-{t}" in q_lower.replace(" ", ""):
+            continue
+        # Pero si aparece en positivo (sin "-" delante), violación.
+        if re.search(rf"(?<![\w\-]){re.escape(t)}(?![\w])", q_lower):
+            return True
+    return False
+
+
+def _post_process_queries(
+    queries: List[str],
+    *,
+    must_not: Optional[List[str]] = None,
+    sector_keywords: Optional[List[str]] = None,
+    target_count: int = 15,
+) -> List[str]:
+    """
+    Post-procesa la lista de queries para garantizar calidad y respeto
+    estricto a las reglas:
+
+      1. Quita prefijos de instrucción residuales ('Query 1:', 'Ejemplo:'...).
+      2. Filtra queries que mencionen must_not en positivo.
+      3. Quita near-duplicados por forma canónica (mismo conjunto de
+         tokens ignorando operadores y orden).
+      4. Limita a target_count.
+
+    No PADDING: si la IA dio menos de target_count queries válidas,
+    devolvemos lo que haya. Mejor pocas y buenas que muchas con ruido.
+    """
+    if not queries:
+        return []
+
+    mn = list(must_not or [])
+
+    seen_canonical: set = set()
+    out: List[str] = []
+
+    for q in queries:
+        if not isinstance(q, str):
+            continue
+        s = q.strip().strip("`'\"")
+        if len(s) < 4:
+            continue
+        # Filtro #1: prefijo de instrucción
+        low = s.lower()
+        if any(low.startswith(p) for p in _SKIP_QUERY_PREFIXES):
+            continue
+        # Filtro #2: must_not en positivo
+        if _query_violates_must_not(s, mn):
+            continue
+        # Filtro #3: near-duplicado
+        canonical = _normalize_query(s)
+        if not canonical or canonical in seen_canonical:
+            continue
+        seen_canonical.add(canonical)
+        out.append(s)
+        if len(out) >= target_count:
+            break
+
+    return out
 
 
 def _clean_queries(raw: List[Any]) -> List[str]:
@@ -633,15 +1078,22 @@ _BT_KEYWORDS = {
     "servicio_local":["restaurante", "bar", "peluquería", "clínica", "dentista", "fontanero"],
 }
 
+# OJO: las versiones anteriores usaban un lookahead con "y" sin word
+# boundary, lo que rompía "Shopify" capturándolo como "Shopif" (la `y`
+# final del nombre era confundida con la conjunción española). Ahora
+# capturamos UNA palabra (puede llevar guiones internos y opcionalmente
+# un TLD .com / .io) y dejamos que el post-procesado normalice.
+_TECH_TOKEN = r"[a-zA-Z][a-zA-Z0-9_\-]*(?:\.[a-zA-Z]{2,5})?"
+
 _TECH_NEGATIONS = re.compile(
-    r'\b(?:sin|no|without|excluir|evitar|que no use[n]?|que no ten[ga]+)\s+'
-    r'([a-zA-Z0-9_\- ]+?)(?=\s*(?:y|,|$|\.))',
-    re.IGNORECASE
+    r'\b(?:sin|no|without|excluir|evitar|que\s+no\s+use[n]?|que\s+no\s+ten[ga]+)\s+'
+    r'(' + _TECH_TOKEN + ')',
+    re.IGNORECASE,
 )
 _TECH_REQUIRED = re.compile(
-    r'\b(?:con|with|que use[n]?|que ten[ga]+|usando)\s+'
-    r'([a-zA-Z0-9_\- ]+?)(?=\s*(?:y|,|$|\.))',
-    re.IGNORECASE
+    r'\b(?:con|with|que\s+use[n]?|que\s+ten[ga]+|usando)\s+'
+    r'(' + _TECH_TOKEN + ')',
+    re.IGNORECASE,
 )
 
 
