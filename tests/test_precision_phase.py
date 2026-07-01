@@ -190,6 +190,64 @@ class TestDegradation(unittest.TestCase):
         # pero el cronómetro se resetea.
         self.assertLess(time.monotonic() - d._last_pass_at, 1.0)
 
+    # ── Degradación por CONTEO de rechazos (lo que pidió el usuario) ──
+
+    def test_count_based_bumps_level(self):
+        """Tras N rechazos consecutivos sube un nivel, sin depender del
+        tiempo (determinista)."""
+        d = PrecisionDegradation(stuck_rejections_per_level=5,
+                                  stuck_seconds_per_level=99999)  # tiempo desactivado
+        for _ in range(4):
+            d.mark_reject()
+        self.assertEqual(d.level, 0)   # aún no llega al umbral
+        d.mark_reject()                # 5º rechazo → sube
+        self.assertEqual(d.level, 1)
+
+    def test_count_based_multiple_levels(self):
+        d = PrecisionDegradation(stuck_rejections_per_level=3,
+                                  stuck_seconds_per_level=99999,
+                                  pagespeed_drop_at_level=3)
+        for _ in range(3):
+            d.mark_reject()
+        self.assertEqual(d.level, 1)
+        for _ in range(3):
+            d.mark_reject()
+        self.assertEqual(d.level, 2)
+        for _ in range(3):
+            d.mark_reject()
+        self.assertEqual(d.level, 3)
+        self.assertTrue(d.pagespeed_disabled)
+
+    def test_pass_resets_rejection_counter(self):
+        """Un aprobado resetea el contador de rechazos consecutivos:
+        la calidad no se degrada si vamos encontrando webs."""
+        d = PrecisionDegradation(stuck_rejections_per_level=5,
+                                  stuck_seconds_per_level=99999)
+        for _ in range(4):
+            d.mark_reject()
+        d.mark_pass()                  # reset
+        for _ in range(4):
+            d.mark_reject()
+        self.assertEqual(d.level, 0)   # nunca llegó a 5 seguidos
+
+    def test_count_never_exceeds_max_level(self):
+        d = PrecisionDegradation(stuck_rejections_per_level=1,
+                                  stuck_seconds_per_level=99999,
+                                  max_level=4)
+        for _ in range(50):
+            d.mark_reject()
+        self.assertEqual(d.level, 4)
+
+    def test_status_dict_reports_rejections(self):
+        d = PrecisionDegradation(stuck_rejections_per_level=100,
+                                  stuck_seconds_per_level=99999)
+        d.mark_reject(); d.mark_reject()
+        st = d.status_dict()
+        self.assertEqual(st["rejections"], 2)
+        self.assertEqual(st["rejections_since_level"], 2)
+        self.assertIn("level", st)
+        self.assertIn("pagespeed_disabled", st)
+
 
 class TestJudgeParser(unittest.TestCase):
     def test_parse_yes_no(self):

@@ -1,10 +1,13 @@
 """
 Provider 4 — Google Gemini
-Modelo por defecto: gemini-1.5-flash (15 RPM free tier, estabilidad casi
-infinita; usado como fallback en todas las cadenas).
+Modelo por defecto: gemini-2.5-flash (vivo a jul-2026, usado como
+fallback estable en todas las cadenas).
 
-Se acepta override por llamada vía el parámetro `model` (p.ej.
-"gemini-1.5-pro" si se quiere más calidad y se tiene cuota).
+NOTA: gemini-1.5-flash fue APAGADO por Google (las peticiones devuelven
+404). El default se lee de la env var GEMINI_MODEL (ver task_chains.py);
+alternativa cuando el 2.5 caduque (16-oct-2026): gemini-3.x-flash.
+
+Se acepta override por llamada vía el parámetro `model`.
 """
 import os
 from typing import Optional
@@ -18,7 +21,7 @@ _ENV_KEY = "GEMINI_API_KEY"
 
 class GeminiProvider(BaseProvider):
     name     = "Gemini"
-    model    = "gemini-1.5-flash"
+    model    = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     priority = 3
 
     _API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"

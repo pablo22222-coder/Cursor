@@ -1,10 +1,13 @@
 """
 Provider 3 — SambaNova Cloud
-Modelo por defecto: Meta-Llama-3.1-405B-Instruct (modelo top de SambaNova,
-ideal para la generación de queries de búsqueda donde la calidad importa).
+Modelo por defecto: Meta-Llama-3.3-70B-Instruct (vivo a jul-2026).
 
-Se acepta override por llamada vía el parámetro `model` (p.ej.
-"Meta-Llama-3.1-70B-Instruct" si el 405B está saturado).
+NOTA: Meta-Llama-3.1-405B-Instruct fue RETIRADO del cloud de SambaNova
+en jun-2025 (solo queda On-Request/SambaStack). El default se lee de la
+env var SAMBANOVA_MODEL (ver task_chains.py); alternativa si caduca:
+DeepSeek-V3.1 o gpt-oss-120b.
+
+Se acepta override por llamada vía el parámetro `model`.
 """
 import os
 from typing import Optional
@@ -18,7 +21,7 @@ _ENV_KEY = "SAMBANOVA_API_KEY"
 
 class SambanovaProvider(BaseProvider):
     name     = "SambaNova"
-    model    = "Meta-Llama-3.1-405B-Instruct"
+    model    = os.getenv("SAMBANOVA_MODEL", "Meta-Llama-3.3-70B-Instruct")
     priority = 2
 
     _API_URL = "https://api.sambanova.ai/v1/chat/completions"

@@ -1,9 +1,10 @@
 """
 Provider 2 — Cerebras AI
-Modelo por defecto: llama3.1-8b (rapidísimo, ideal para validación)
+Modelo por defecto: llama3.1-8b (rapidísimo, ideal para validación
+binaria SI/NO; vivo a jul-2026).
 
-Se acepta override por llamada vía el parámetro `model` (p.ej.
-"llama3.1-70b") según la cadena de tareas que esté en juego.
+Configurable por env var CEREBRAS_MODEL. Grande disponible:
+llama-3.3-70b. Se acepta también override por llamada vía `model`.
 """
 import os
 from typing import Optional
@@ -17,7 +18,7 @@ _ENV_KEY = "CEREBRAS_API_KEY"
 
 class CerebrasProvider(BaseProvider):
     name     = "Cerebras"
-    model    = "llama3.1-8b"
+    model    = os.getenv("CEREBRAS_MODEL", "llama3.1-8b")
     priority = 1
 
     _API_URL = "https://api.cerebras.ai/v1/chat/completions"

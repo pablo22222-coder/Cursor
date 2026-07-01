@@ -183,33 +183,65 @@ class TestUserOwnProvider(unittest.TestCase):
 # ─────────────────────────────────────────────────────────────────────
 
 class TestTaskChainsExactOrder(unittest.TestCase):
+    """
+    Verifica el ORDEN de proveedores por tarea (lo que pidió el usuario),
+    usando las constantes de modelo de task_chains en vez de literales,
+    para que estos tests no se rompan cuando un proveedor deprecie un
+    modelo y actualicemos la constante.
+    """
+
     def test_prompt_analysis_order(self):
+        from src.services.task_chains import (
+            GROQ_LLAMA_70B, SAMBA_LLAMA_405B, GEMINI_FLASH,
+        )
         seq = [(s.provider_class.__name__, s.model) for s in PROMPT_ANALYSIS_CHAIN]
         self.assertEqual(seq, [
-            ("GroqProvider",      "llama-3.1-70b-versatile"),
-            ("SambanovaProvider", "Meta-Llama-3.1-405B-Instruct"),
-            ("GeminiProvider",    "gemini-1.5-flash"),
+            ("GroqProvider",      GROQ_LLAMA_70B),
+            ("SambanovaProvider", SAMBA_LLAMA_405B),
+            ("GeminiProvider",    GEMINI_FLASH),
             ("UserOwnProvider",   None),
         ])
 
     def test_query_generation_order(self):
+        from src.services.task_chains import (
+            GROQ_LLAMA_70B, SAMBA_LLAMA_405B, GEMINI_FLASH,
+        )
         seq = [(s.provider_class.__name__, s.model) for s in QUERY_GENERATION_CHAIN]
         self.assertEqual(seq, [
-            ("SambanovaProvider", "Meta-Llama-3.1-405B-Instruct"),
-            ("GroqProvider",      "llama-3.1-70b-versatile"),
-            ("GeminiProvider",    "gemini-1.5-flash"),
+            ("SambanovaProvider", SAMBA_LLAMA_405B),
+            ("GroqProvider",      GROQ_LLAMA_70B),
+            ("GeminiProvider",    GEMINI_FLASH),
             ("UserOwnProvider",   None),
         ])
 
     def test_validation_order(self):
+        from src.services.task_chains import (
+            GROQ_LLAMA_70B, GROQ_LLAMA_8B, CEREBRAS_LLAMA_8B, GEMINI_FLASH,
+        )
         seq = [(s.provider_class.__name__, s.model) for s in VALIDATION_CHAIN]
         self.assertEqual(seq, [
-            ("CerebrasProvider", "llama3.1-8b"),
-            ("GroqProvider",     "llama-3.1-70b-versatile"),
-            ("GroqProvider",     "llama-3.1-8b-instant"),
-            ("GeminiProvider",   "gemini-1.5-flash"),
+            ("CerebrasProvider", CEREBRAS_LLAMA_8B),
+            ("GroqProvider",     GROQ_LLAMA_70B),
+            ("GroqProvider",     GROQ_LLAMA_8B),
+            ("GeminiProvider",   GEMINI_FLASH),
             ("UserOwnProvider",  None),
         ])
+
+    def test_models_are_alive_not_decommissioned(self):
+        """Guard-rail: ninguno de los modelos MUERTOS conocidos debe
+        estar en las cadenas por defecto."""
+        from src.services.task_chains import (
+            GROQ_LLAMA_70B, GROQ_LLAMA_8B, SAMBA_LLAMA_405B,
+            CEREBRAS_LLAMA_8B, GEMINI_FLASH,
+        )
+        dead = {
+            "llama-3.1-70b-versatile",       # Groq, ene-2025
+            "Meta-Llama-3.1-405B-Instruct",  # SambaNova, jun-2025
+            "gemini-1.5-flash",              # Google, apagado (404)
+        }
+        for m in (GROQ_LLAMA_70B, GROQ_LLAMA_8B, SAMBA_LLAMA_405B,
+                  CEREBRAS_LLAMA_8B, GEMINI_FLASH):
+            self.assertNotIn(m, dead, f"Modelo muerto en uso: {m}")
 
     def test_get_chain_falls_back_to_analysis_on_unknown(self):
         self.assertIs(get_chain("unknown_task"), PROMPT_ANALYSIS_CHAIN)
@@ -321,22 +353,19 @@ class TestTaskSingletons(unittest.TestCase):
         self.assertIsNot(m1, m3)
 
     def test_status_includes_chain_labels(self):
+        from src.services.task_chains import GROQ_LLAMA_70B, GROQ_LLAMA_8B
         m = get_ai_manager_for_task(TASK_VALIDATION)
         st = m.status()
         self.assertEqual(st["task"], TASK_VALIDATION)
-        labels = [c["label"] for c in st["chain"]]
-        # validation chain tiene Groq con dos modelos -> labels distintos.
-        # El label colapsa al nombre del provider cuando el modelo
-        # coincide con el default (70B). El 8B sí lleva sufijo.
-        groq_labels = [l for l in labels if l.startswith("Groq")]
+        # La cadena de validación tiene Groq con DOS modelos distintos.
+        groq_labels = [c["label"] for c in st["chain"] if c["provider"] == "Groq"]
         self.assertEqual(len(groq_labels), 2)
-        # Uno es "Groq" (default 70B) y el otro "Groq[llama-3.1-8b-instant]"
-        self.assertIn("Groq", groq_labels)
-        self.assertTrue(any("8b-instant" in l for l in groq_labels))
-        # Y los models del status_dict sí contienen ambos por separado
+        # Los modelos de Groq en el status_dict contienen ambos por separado
         models = [c["model"] for c in st["chain"] if c["provider"] == "Groq"]
-        self.assertIn("llama-3.1-70b-versatile", models)
-        self.assertIn("llama-3.1-8b-instant", models)
+        self.assertIn(GROQ_LLAMA_70B, models)
+        self.assertIn(GROQ_LLAMA_8B, models)
+        # Y son distintos entre sí (el punto de tener dos eslabones Groq)
+        self.assertNotEqual(GROQ_LLAMA_70B, GROQ_LLAMA_8B)
 
 
 # ─────────────────────────────────────────────────────────────────────

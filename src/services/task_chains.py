@@ -30,6 +30,7 @@ opciones siempre que el usuario haya configurado su `.env`.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Type
 
@@ -51,26 +52,43 @@ TASK_VALIDATION       = "validation"
 
 
 # ─────────────────────────────────────────────────────────────────────
-#  Modelos canónicos (etiquetas explícitas)
+#  Modelos por proveedor — CONFIGURABLES POR VARIABLE DE ENTORNO
 #
-#  Mantenemos los nombres de modelo aquí para que las cadenas queden
-#  super claras y se puedan cambiar sin tocar los providers.
+#  IMPORTANTE: los IDs de modelo de los proveedores caducan cada pocos
+#  meses. Para que el software NUNCA se rompa cuando eso pase, cada
+#  modelo se lee de una variable de entorno y solo se usa un valor por
+#  defecto (vivo a fecha de hoy) si la variable no está definida.
+#
+#  Cuando un proveedor deprecie un modelo, basta con poner el nuevo ID
+#  en tu `.env` (p.ej. GROQ_MODEL_LARGE=openai/gpt-oss-120b) SIN tocar
+#  el código.
+#
+#  Estado de los defaults (revisado jul-2026):
+#    · Groq  llama-3.3-70b-versatile → vivo (sustituye al 3.1-70B que
+#            fue DECOMISIONADO en ene-2025). Alternativa estable si
+#            caduca: openai/gpt-oss-120b.
+#    · Groq  llama-3.1-8b-instant    → vivo. Alternativa: openai/gpt-oss-20b.
+#    · SambaNova Meta-Llama-3.3-70B-Instruct → vivo (el 405B fue RETIRADO
+#            del cloud en jun-2025). Alternativa: DeepSeek-V3.1.
+#    · Cerebras llama3.1-8b          → vivo. Grande: llama-3.3-70b.
+#    · Gemini gemini-2.5-flash       → vivo (el 1.5-flash fue APAGADO,
+#            devolvía 404). Alternativa futura: gemini-3.x-flash.
 # ─────────────────────────────────────────────────────────────────────
 
-# Groq
-GROQ_LLAMA_70B = "llama-3.1-70b-versatile"
-GROQ_LLAMA_8B  = "llama-3.1-8b-instant"
+# Groq  (grande = análisis/queries; pequeño = validación rápida)
+GROQ_LLAMA_70B = os.getenv("GROQ_MODEL_LARGE", "llama-3.3-70b-versatile")
+GROQ_LLAMA_8B  = os.getenv("GROQ_MODEL_SMALL", "llama-3.1-8b-instant")
 
-# SambaNova
-SAMBA_LLAMA_405B = "Meta-Llama-3.1-405B-Instruct"
-SAMBA_LLAMA_70B  = "Meta-Llama-3.1-70B-Instruct"
+# SambaNova  (el 405B ya no está en el cloud; usamos el mayor Llama vivo)
+SAMBA_LLAMA_405B = os.getenv("SAMBANOVA_MODEL", "Meta-Llama-3.3-70B-Instruct")
+SAMBA_LLAMA_70B  = os.getenv("SAMBANOVA_MODEL", "Meta-Llama-3.3-70B-Instruct")
 
-# Cerebras (alias del catálogo público)
-CEREBRAS_LLAMA_70B = "llama3.1-70b"
-CEREBRAS_LLAMA_8B  = "llama3.1-8b"
+# Cerebras
+CEREBRAS_LLAMA_70B = os.getenv("CEREBRAS_MODEL_LARGE", "llama-3.3-70b")
+CEREBRAS_LLAMA_8B  = os.getenv("CEREBRAS_MODEL", "llama3.1-8b")
 
 # Gemini
-GEMINI_FLASH = "gemini-1.5-flash"
+GEMINI_FLASH = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 
 # ─────────────────────────────────────────────────────────────────────

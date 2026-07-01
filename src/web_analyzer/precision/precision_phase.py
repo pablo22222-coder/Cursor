@@ -49,8 +49,17 @@ from src.web_analyzer.precision.precision_judge import judge_domain, JudgeVerdic
 class PrecisionDegradation:
     """
     Estado compartido entre los workers de la Fase 2 que va relajando
-    los criterios cuando lleva mucho tiempo sin encontrar dominios que
-    pasen el filtro.
+    los criterios cuando la Fase 2 lleva demasiadas webs rechazadas sin
+    dejar pasar ninguna. Así el pipeline nunca se queda "pensando de por
+    vida" buscando webs perfectas que no llegan.
+
+    Sube de nivel por DOS disparadores independientes (gana el que
+    llegue antes):
+
+      A) POR CONTEO (el que pidió el usuario): tras `stuck_rejections_per_level`
+         dominios RECHAZADOS consecutivos sin ningún aprobado, sube 1 nivel.
+      B) POR TIEMPO (red de seguridad): tras `stuck_seconds_per_level`
+         segundos sin ningún aprobado, sube 1 nivel.
 
     Niveles:
       0 — Estricto: PageSpeed activo si la IA lo pidió. Juez estricto.
@@ -58,7 +67,14 @@ class PrecisionDegradation:
       2 — Relajado L2: el juez recibe nivel 2 (más permisivo).
       3 — PageSpeed OFF: aunque la IA lo pidiera, se desactiva.
       4 — Modo emergencia: solo HTML + relajación máxima.
+
+    La calidad NO se compromete de golpe: la exigencia baja de forma
+    GRADUAL y solo lo justo para desatascar; en cuanto un dominio pasa,
+    el contador de rechazos se resetea (mark_pass).
     """
+    # Disparador A — por conteo de rechazos consecutivos.
+    stuck_rejections_per_level: int = 8
+    # Disparador B — por tiempo (segundos) sin aprobados.
     stuck_seconds_per_level: float = 45.0
     pagespeed_drop_at_level: int = 3
     max_level: int = 4
@@ -68,21 +84,42 @@ class PrecisionDegradation:
     _started_at: float = field(default_factory=time.monotonic)
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _passes: int = 0
+    _rejections: int = 0                 # total de rechazos (métrica)
+    _rejections_since_level: int = 0     # rechazos desde el último cambio de nivel/aprobado
 
     def mark_pass(self):
+        """Un dominio ha pasado la Fase 2 → reset de ambos contadores."""
         with self._lock:
             self._passes += 1
             self._last_pass_at = time.monotonic()
+            self._rejections_since_level = 0
+
+    def mark_reject(self):
+        """
+        Un dominio ha sido RECHAZADO en la Fase 2. Si acumulamos
+        demasiados rechazos consecutivos, subimos un nivel de relajación.
+        """
+        with self._lock:
+            self._rejections += 1
+            self._rejections_since_level += 1
+            if (self._rejections_since_level >= self.stuck_rejections_per_level
+                    and self._level < self.max_level):
+                self._level += 1
+                self._rejections_since_level = 0
+                self._last_pass_at = time.monotonic()  # reset cronómetro también
 
     def mark_check(self):
-        """Cada worker llama aquí antes de procesar un dominio para que
-        el nivel se ajuste si llevamos demasiado tiempo sin nada."""
+        """
+        Cada worker llama aquí ANTES de procesar un dominio. Ajusta el
+        nivel si llevamos demasiado TIEMPO sin ningún aprobado (red de
+        seguridad complementaria al conteo de rechazos)."""
         with self._lock:
             now = time.monotonic()
             stuck = now - self._last_pass_at
             target_level = min(self.max_level, int(stuck / self.stuck_seconds_per_level))
             if target_level > self._level:
                 self._level = target_level
+                self._rejections_since_level = 0
                 # Reset del cronómetro al subir de nivel para no
                 # encadenar saltos en cascada.
                 self._last_pass_at = now
@@ -108,6 +145,8 @@ class PrecisionDegradation:
             return {
                 "level": self._level,
                 "passes": self._passes,
+                "rejections": self._rejections,
+                "rejections_since_level": self._rejections_since_level,
                 "stuck_seconds": round(time.monotonic() - self._last_pass_at, 1),
                 "pagespeed_disabled": self._level >= self.pagespeed_drop_at_level,
             }
@@ -336,6 +375,8 @@ class PrecisionPhase:
             else:
                 result.stage_at_failure = "judge"
                 result.passed = False
+                # Rechazo real → cuenta para la degradación por conteo.
+                self.degradation.mark_reject()
         else:
             result.passed = True
             self.degradation.mark_pass()

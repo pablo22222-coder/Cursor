@@ -1,6 +1,10 @@
 """
 Provider 1 — Groq Cloud
-Modelo por defecto: llama-3.1-70b-versatile (alta calidad)
+Modelo por defecto: llama-3.3-70b-versatile (alta calidad, vivo a jul-2026)
+
+NOTA: llama-3.1-70b-versatile fue DECOMISIONADO por Groq en ene-2025.
+El default se lee de la env var GROQ_MODEL_LARGE (ver task_chains.py);
+si caduca el 3.3, pon en tu .env GROQ_MODEL_LARGE=openai/gpt-oss-120b.
 
 El parámetro `model` de complete() permite usar otros modelos del
 catálogo de Groq según la tarea (p.ej. llama-3.1-8b-instant para
@@ -18,8 +22,8 @@ _ENV_KEY = "GROQ_API_KEY"
 
 class GroqProvider(BaseProvider):
     name     = "Groq"
-    # Modelo por defecto cuando no se pasa override (alta calidad).
-    model    = "llama-3.1-70b-versatile"
+    # Modelo por defecto si no se pasa override. Configurable por env.
+    model    = os.getenv("GROQ_MODEL_LARGE", "llama-3.3-70b-versatile")
     priority = 0
 
     _API_URL = "https://api.groq.com/openai/v1/chat/completions"
