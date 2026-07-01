@@ -923,6 +923,45 @@ def _query_violates_must_not(q: str, must_not: List[str]) -> bool:
     return False
 
 
+def _strip_wrapping_quotes(s: str) -> str:
+    """
+    Quita comillas/backtick SOLO si envuelven la query ENTERA como un
+    par único (es decir, el modelo devolvió la query completa metida
+    dentro de una comilla superflua, p.ej. '"mi query"' o '`mi query`').
+
+    CRÍTICO — bug corregido: la implementación anterior hacía
+    ``s.strip("`'\"")`` sobre los extremos SIN comprobar que las
+    comillas estuvieran balanceadas. Eso rompía queries de Google
+    legítimas que empiezan y/o terminan con una frase entre comillas,
+    p.ej.:
+
+        '"Agencia de marketing digital" precio contacto -"artículo"'
+
+    Esa query tiene el primer carácter y el último carácter iguales a
+    '"', pero hay OTRAS comillas en medio (las de "artículo" y demás
+    frases exactas) — no es un wrapping superfluo, es sintaxis de
+    búsqueda real. Quitar solo la primera y la última comilla deja
+    un número IMPAR de comillas → query mal formada → Serper la
+    rechaza con 400 Bad Request (así se perdían la mayoría de las
+    queries del fallback local en producción).
+
+    Regla segura: solo quitamos el par externo si ese carácter de
+    comilla aparece EXACTAMENTE dos veces en toda la cadena (una al
+    principio, una al final) — así garantizamos que no hay ninguna
+    frase exacta interna que dependa de él.
+    """
+    s = s.strip()
+    for qc in ('"', "'", "`"):
+        if (
+            len(s) >= 2
+            and s.startswith(qc)
+            and s.endswith(qc)
+            and s.count(qc) == 2
+        ):
+            return s[1:-1].strip()
+    return s
+
+
 def _post_process_queries(
     queries: List[str],
     *,
@@ -954,7 +993,7 @@ def _post_process_queries(
     for q in queries:
         if not isinstance(q, str):
             continue
-        s = q.strip().strip("`'\"")
+        s = _strip_wrapping_quotes(q.strip())
         if len(s) < 4:
             continue
         # Filtro #1: prefijo de instrucción
@@ -987,7 +1026,7 @@ def _clean_queries(raw: List[Any]) -> List[str]:
     for q in raw:
         if not isinstance(q, str):
             continue
-        s = q.strip().strip("`'\"")
+        s = _strip_wrapping_quotes(q.strip())
         if len(s) <= 8:
             continue
         if any(s.lower().startswith(p) for p in _SKIP_QUERY_PREFIXES):

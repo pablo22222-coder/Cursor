@@ -18,7 +18,9 @@ _ENV_KEY = "CEREBRAS_API_KEY"
 
 class CerebrasProvider(BaseProvider):
     name     = "Cerebras"
-    model    = os.getenv("CEREBRAS_MODEL", "llama3.1-8b")
+    # `or` en vez de segundo arg de getenv: si la env var está definida
+    # pero vacía, el default SÍ debe aplicarse (ver groq_provider.py).
+    model    = os.getenv("CEREBRAS_MODEL") or "llama3.1-8b"
     priority = 1
 
     _API_URL = "https://api.cerebras.ai/v1/chat/completions"

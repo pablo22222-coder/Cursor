@@ -21,7 +21,11 @@ _ENV_KEY = "GEMINI_API_KEY"
 
 class GeminiProvider(BaseProvider):
     name     = "Gemini"
-    model    = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    # `or` en vez de segundo arg de getenv: si la env var está definida
+    # pero vacía, el default SÍ debe aplicarse (ver groq_provider.py).
+    # Si no, el modelo queda "" y la URL final es ".../models/:generateContent"
+    # (sin nombre de modelo) → Google devuelve 404.
+    model    = os.getenv("GEMINI_MODEL") or "gemini-2.5-flash"
     priority = 3
 
     _API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"

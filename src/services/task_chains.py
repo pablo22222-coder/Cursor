@@ -75,20 +75,44 @@ TASK_VALIDATION       = "validation"
 #            devolvía 404). Alternativa futura: gemini-3.x-flash.
 # ─────────────────────────────────────────────────────────────────────
 
+def _env_model(env_key: str, default: str) -> str:
+    """
+    Lee el modelo desde una variable de entorno con fallback SEGURO.
+
+    CRÍTICO: usamos ``os.getenv(key) or default`` en vez de
+    ``os.getenv(key, default)``. La diferencia importa muchísimo aquí:
+    si el usuario dejó la variable DEFINIDA PERO VACÍA en su `.env`
+    (tal y como invita `.env.example`: "deja en blanco para usar el
+    default"), ``os.getenv(key, default)`` NO usaría el default porque
+    la variable SÍ existe — devolvería ``""`` y rompería la cadena
+    entera de IA (modelo vacío → URL/payload inválido → 404/400 en
+    Groq, SambaNova y Gemini simultáneamente).
+
+    Con ``os.getenv(key) or default`` cualquier valor "vacío" (None,
+    "", o solo espacios tras strip) cae al default.
+    """
+    value = os.getenv(env_key)
+    if value is not None:
+        value = value.strip()
+    if value:
+        return value
+    return default
+
+
 # Groq  (grande = análisis/queries; pequeño = validación rápida)
-GROQ_LLAMA_70B = os.getenv("GROQ_MODEL_LARGE", "llama-3.3-70b-versatile")
-GROQ_LLAMA_8B  = os.getenv("GROQ_MODEL_SMALL", "llama-3.1-8b-instant")
+GROQ_LLAMA_70B = _env_model("GROQ_MODEL_LARGE", "llama-3.3-70b-versatile")
+GROQ_LLAMA_8B  = _env_model("GROQ_MODEL_SMALL", "llama-3.1-8b-instant")
 
 # SambaNova  (el 405B ya no está en el cloud; usamos el mayor Llama vivo)
-SAMBA_LLAMA_405B = os.getenv("SAMBANOVA_MODEL", "Meta-Llama-3.3-70B-Instruct")
-SAMBA_LLAMA_70B  = os.getenv("SAMBANOVA_MODEL", "Meta-Llama-3.3-70B-Instruct")
+SAMBA_LLAMA_405B = _env_model("SAMBANOVA_MODEL", "Meta-Llama-3.3-70B-Instruct")
+SAMBA_LLAMA_70B  = _env_model("SAMBANOVA_MODEL", "Meta-Llama-3.3-70B-Instruct")
 
 # Cerebras
-CEREBRAS_LLAMA_70B = os.getenv("CEREBRAS_MODEL_LARGE", "llama-3.3-70b")
-CEREBRAS_LLAMA_8B  = os.getenv("CEREBRAS_MODEL", "llama3.1-8b")
+CEREBRAS_LLAMA_70B = _env_model("CEREBRAS_MODEL_LARGE", "llama-3.3-70b")
+CEREBRAS_LLAMA_8B  = _env_model("CEREBRAS_MODEL", "llama3.1-8b")
 
 # Gemini
-GEMINI_FLASH = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_FLASH = _env_model("GEMINI_MODEL", "gemini-2.5-flash")
 
 
 # ─────────────────────────────────────────────────────────────────────

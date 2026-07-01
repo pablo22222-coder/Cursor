@@ -33,7 +33,7 @@ from src.services.ai_manager import (  # noqa: E402
 from src.services.task_chains import (  # noqa: E402
     TASK_PROMPT_ANALYSIS, TASK_QUERY_GENERATION, TASK_VALIDATION,
     PROMPT_ANALYSIS_CHAIN, QUERY_GENERATION_CHAIN, VALIDATION_CHAIN,
-    get_chain,
+    get_chain, _env_model,
 )
 
 
@@ -176,6 +176,70 @@ class TestUserOwnProvider(unittest.TestCase):
         self.assertEqual(captured["url"], "https://api.example.com/v1/chat/completions")
         self.assertEqual(captured["body"]["model"], "gpt-4o-mini")
         self.assertEqual(captured["headers"]["Authorization"], "Bearer " + ("x" * 20))
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  _env_model — regresión del bug "variable definida pero vacía"
+#
+#  Bug real reportado: el usuario copió .env.example (que deja los
+#  *_MODEL en blanco a propósito, para usar los defaults) y las 3 IAs
+#  murieron a la vez porque os.getenv(key, default) NO usa el default
+#  cuando la variable existe pero está vacía — devuelve "".
+#  Esto producía URLs rotas como
+#  ".../models/:generateContent" (modelo vacío) en Gemini, y 404/400
+#  en Groq/SambaNova con model="" en el body.
+# ─────────────────────────────────────────────────────────────────────
+
+class TestEnvModelFallback(unittest.TestCase):
+    def setUp(self):
+        self._saved = {}
+        for k in ("TEST_MODEL_VAR",):
+            self._saved[k] = os.environ.get(k)
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_unset_variable_uses_default(self):
+        os.environ.pop("TEST_MODEL_VAR", None)
+        self.assertEqual(_env_model("TEST_MODEL_VAR", "default-model"),
+                         "default-model")
+
+    def test_empty_string_variable_uses_default(self):
+        """El caso del bug real: variable PRESENTE pero vacía."""
+        os.environ["TEST_MODEL_VAR"] = ""
+        self.assertEqual(_env_model("TEST_MODEL_VAR", "default-model"),
+                         "default-model")
+
+    def test_whitespace_only_variable_uses_default(self):
+        os.environ["TEST_MODEL_VAR"] = "   "
+        self.assertEqual(_env_model("TEST_MODEL_VAR", "default-model"),
+                         "default-model")
+
+    def test_real_value_is_used_and_trimmed(self):
+        os.environ["TEST_MODEL_VAR"] = "  custom-model-id  "
+        self.assertEqual(_env_model("TEST_MODEL_VAR", "default-model"),
+                         "custom-model-id")
+
+    def test_no_dead_model_in_live_chains(self):
+        """Guard-rail: los modelos que ya sabemos MUERTOS no deben
+        colarse en las cadenas activas incluso si alguien los deja
+        puestos en su .env por error de copy-paste antiguo."""
+        from src.services.task_chains import (
+            GROQ_LLAMA_70B, SAMBA_LLAMA_405B, GEMINI_FLASH,
+        )
+        dead_models = {
+            "llama-3.1-70b-versatile",
+            "Meta-Llama-3.1-405B-Instruct",
+            "gemini-1.5-flash",
+            "",  # el síntoma del bug: modelo vacío
+        }
+        for m in (GROQ_LLAMA_70B, SAMBA_LLAMA_405B, GEMINI_FLASH):
+            self.assertNotIn(m, dead_models)
+            self.assertTrue(m, "el modelo nunca debe quedar vacío")
 
 
 # ─────────────────────────────────────────────────────────────────────

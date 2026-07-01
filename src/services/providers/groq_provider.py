@@ -23,7 +23,12 @@ _ENV_KEY = "GROQ_API_KEY"
 class GroqProvider(BaseProvider):
     name     = "Groq"
     # Modelo por defecto si no se pasa override. Configurable por env.
-    model    = os.getenv("GROQ_MODEL_LARGE", "llama-3.3-70b-versatile")
+    # OJO: usamos `or` en vez de segundo arg de getenv — si la variable
+    # está definida pero vacía (p.ej. copiaste .env.example tal cual),
+    # con `os.getenv(key, default)` NO se aplicaría el default y el
+    # modelo quedaría en "" (rompe la petición con 404). Ver
+    # src/services/task_chains.py::_env_model para el mismo fix.
+    model    = os.getenv("GROQ_MODEL_LARGE") or "llama-3.3-70b-versatile"
     priority = 0
 
     _API_URL = "https://api.groq.com/openai/v1/chat/completions"

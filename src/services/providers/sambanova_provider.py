@@ -21,7 +21,9 @@ _ENV_KEY = "SAMBANOVA_API_KEY"
 
 class SambanovaProvider(BaseProvider):
     name     = "SambaNova"
-    model    = os.getenv("SAMBANOVA_MODEL", "Meta-Llama-3.3-70B-Instruct")
+    # `or` en vez de segundo arg de getenv: si la env var está definida
+    # pero vacía, el default SÍ debe aplicarse (ver groq_provider.py).
+    model    = os.getenv("SAMBANOVA_MODEL") or "Meta-Llama-3.3-70B-Instruct"
     priority = 2
 
     _API_URL = "https://api.sambanova.ai/v1/chat/completions"

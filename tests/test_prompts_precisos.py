@@ -25,7 +25,7 @@ import src.services.ai_manager as ai_manager_module  # noqa: E402
 from src.services.ai_interpreter import (  # noqa: E402
     _format_analysis_block, _extract_sector_keywords,
     _dedupe_keep_order, _normalize_query, _query_violates_must_not,
-    _post_process_queries,
+    _post_process_queries, _strip_wrapping_quotes, _clean_queries,
     AIInterpreter,
 )
 from src.services.task_chains import (  # noqa: E402
@@ -105,6 +105,93 @@ class TestNormalizeQuery(unittest.TestCase):
         b = _normalize_query('zapatos')
         # 'es' < 3 chars así que se filtra; a queda solo 'zapatos'
         self.assertEqual(a, b)
+
+
+class TestStripWrappingQuotes(unittest.TestCase):
+    """
+    Regresión de un bug real en producción: la implementación anterior
+    (``s.strip("`'\\"")``) quitaba comillas de los EXTREMOS sin
+    comprobar que estuvieran balanceadas. Esto corrompía queries de
+    Google que empiezan y/o terminan con una frase exacta legítima,
+    dejando un número IMPAR de comillas → Serper las rechazaba con
+    400 Bad Request (así se perdía la mayoría de las queries del
+    fallback local reportadas por el usuario en logs de producción).
+    """
+
+    def test_real_world_broken_query_stays_intact(self):
+        """La query EXACTA de los logs de producción que causaba el 400."""
+        q = ('"Agencia de marketing digital" precio contacto '
+             '-"qué es" -"guía" -wikipedia -blog -"artículo"')
+        fixed = _strip_wrapping_quotes(q)
+        # No se debe tocar: no es un wrapping superfluo de toda la
+        # query, son frases exactas legítimas de sintaxis Google.
+        self.assertEqual(fixed, q)
+        self.assertEqual(fixed.count('"') % 2, 0, "comillas desbalanceadas")
+
+    def test_query_wrapped_entirely_gets_unwrapped(self):
+        """Caso legítimo: el LLM envuelve TODA la query en comillas
+        superfluas — esto SÍ se debe limpiar."""
+        self.assertEqual(
+            _strip_wrapping_quotes('"tienda de zapatos online Madrid"'),
+            "tienda de zapatos online Madrid",
+        )
+
+    def test_backtick_wrapped_gets_unwrapped(self):
+        self.assertEqual(
+            _strip_wrapping_quotes("`tienda de zapatos`"),
+            "tienda de zapatos",
+        )
+
+    def test_single_quote_wrapped_gets_unwrapped(self):
+        self.assertEqual(
+            _strip_wrapping_quotes("'tienda de zapatos'"),
+            "tienda de zapatos",
+        )
+
+    def test_multiple_exact_phrases_never_touched(self):
+        q = '"frase uno" y también "frase dos" al final'
+        self.assertEqual(_strip_wrapping_quotes(q), q)
+
+    def test_query_starting_with_quote_but_no_closing_quote_untouched(self):
+        q = '"solo abre sin cerrar en Google'
+        # Empieza con comilla pero NO termina con comilla → no debe tocarse.
+        self.assertEqual(_strip_wrapping_quotes(q), q)
+
+    def test_plain_query_untouched(self):
+        q = "tienda de zapatos en Madrid"
+        self.assertEqual(_strip_wrapping_quotes(q), q)
+
+    def test_post_process_never_produces_odd_quote_count(self):
+        """Verificación end-to-end: ninguna query que salga de
+        _post_process_queries puede tener comillas desbalanceadas."""
+        real_queries = [
+            '"Agencia de marketing digital" precio contacto -"qué es" -"guía" -wikipedia -blog -"artículo"',
+            'Agencia de marketing digital empresa servicios "sobre nosotros"',
+            'Agencia de marketing digital "solicitar presupuesto" OR "pedir información"',
+            'Agencia de marketing digital site:.com OR site:.es -"qué es"',
+            'intitle:"Agencia de marketing digital" contacto',
+            'Agencia de marketing digital "nuestros servicios" OR "our services"',
+            'Agencia de marketing digital pricing OR "get a quote" OR "free trial"',
+            'inurl:agencia Agencia de marketing digital',
+            'Agencia de marketing digital "trabaja con nosotros" OR "contact us"',
+        ]
+        out = _post_process_queries(real_queries)
+        self.assertGreater(len(out), 0)
+        for q in out:
+            self.assertEqual(
+                q.count('"') % 2, 0,
+                f"Query con comillas desbalanceadas tras post-process: {q!r}",
+            )
+
+    def test_clean_queries_never_produces_odd_quote_count(self):
+        """Mismo chequeo para _clean_queries (usado en la ruta de la IA)."""
+        raw = [
+            '"tienda online" "añadir al carrito" Barcelona',
+            'intitle:"bicicletas eléctricas" contacto',
+        ]
+        out = _clean_queries(raw)
+        for q in out:
+            self.assertEqual(q.count('"') % 2, 0)
 
 
 class TestMustNotEnforcement(unittest.TestCase):
