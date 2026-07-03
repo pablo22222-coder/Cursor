@@ -10,7 +10,26 @@ Mejoras respecto a la versión anterior:
 · Pre-filtrado por exclusion_indicators en snippet antes de añadir resultado
 · Si intent.location tiene ciudad/región se añaden queries geo-localizadas
 · Descarte por dominio exacto y por sufijo (ej. "shopify.com" cubre "tienda.myshopify.com")
+· Sanitización defensiva de cada query justo antes de construir la
+  petición HTTP, para que Serper nunca reciba una query mal formada
+  (comillas desbalanceadas, caracteres de control, longitud excesiva)
+  sin importar de qué origen venga (IA, fallback local, geo-localización).
+
+NOTA IMPORTANTE sobre el formato de la petición:
+  La API de Serper (https://google.serper.dev/search) se llama con
+  POST y un body JSON: {"q": "...", "num": ...}. NO es un endpoint GET
+  con parámetros en la URL. Por eso el valor de "q" NUNCA debe pasar
+  por urllib.parse.quote() (percent-encoding): eso es para segmentos
+  de URL, no para valores dentro de un cuerpo JSON. `requests` ya
+  serializa el JSON correctamente (incluye el escapado de comillas
+  internas). Aplicar quote() aquí convertiría espacios en "%20" y
+  comillas en "%22" dentro del propio texto de búsqueda, y Serper
+  buscaría esa cadena rara literalmente en vez de la consulta real
+  — no arregla ningún 400, rompe la búsqueda. La causa real de los
+  400 eran queries con comillas dobles desbalanceadas (sintaxis de
+  búsqueda de Google inválida); ver `_sanitize_query()` más abajo.
 """
+import re
 import time
 import requests
 from dataclasses import dataclass, field
@@ -24,6 +43,17 @@ from config.settings import get_settings
 # de snippet, 10/query a menudo dejaba un buffer corto para que el
 # pipeline pudiera alcanzar el max_results pedido por el usuario.
 RESULTS_PER_QUERY = 20
+
+# Longitud máxima de una query enviada a Serper/Google. Por encima de
+# esto Google trunca o puede rechazar la petición; nos quedamos con
+# margen de sobra por debajo del límite real (~2048 bytes del lado de
+# Google, pero las queries de búsqueda efectivas nunca necesitan tanto).
+MAX_QUERY_LENGTH = 300
+
+# Caracteres de control / no imprimibles que a veces cuelan los LLMs
+# (saltos de línea sueltos, tabs, etc.) y que rompen la query.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_WHITESPACE_RE = re.compile(r"\s+")
 
 
 @dataclass
@@ -164,6 +194,10 @@ class SerperSearch:
 
     def _execute_query(self, query: str, num: int = RESULTS_PER_QUERY) -> List[SearchResult]:
         """Ejecuta una sola query en Serper y devuelve los resultados crudos."""
+        query = _sanitize_query(query)
+        if not query:
+            return []
+
         try:
             resp = requests.post(
                 self._base_url,
@@ -225,3 +259,71 @@ class SerperSearch:
             return netloc[4:] if netloc.startswith("www.") else netloc
         except Exception:
             return url
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  Sanitización defensiva de queries — última barrera antes de Serper
+# ─────────────────────────────────────────────────────────────────────
+
+def _sanitize_query(query: str) -> str:
+    """
+    Garantiza que `query` es una cadena válida para enviar a Serper,
+    sin importar de dónde venga (IA, fallback local, concatenación de
+    geo-localización, etc.). Actúa como red de seguridad FINAL, justo
+    antes de construir el body JSON de la petición HTTP.
+
+    Reglas aplicadas (en orden):
+      1. Quita caracteres de control / no imprimibles.
+      2. Colapsa espacios en blanco múltiples (saltos de línea, tabs)
+         a un único espacio y recorta los extremos.
+      3. Si el número de comillas dobles es IMPAR (sintaxis de "frase
+         exacta" de Google rota — la causa real de los 400 vistos en
+         producción), quita la ÚLTIMA comilla suelta para dejar la
+         query sintácticamente válida, en vez de descartarla entera.
+      4. Trunca a MAX_QUERY_LENGTH caracteres, cortando en el último
+         espacio para no partir una palabra ni dejar un operador o
+         comilla a medias; si el corte deja comillas desbalanceadas
+         de nuevo, se repite el balanceo del paso 3.
+
+    NO se aplica urllib.parse.quote() (percent-encoding): la query
+    viaja dentro de un campo de un body JSON, no como segmento de URL,
+    así que el percent-encoding sería incorrecto y cambiaría el
+    significado de la búsqueda (ver docstring del módulo).
+
+    Devuelve "" si tras sanitizar no queda nada útil (p.ej. la query
+    original era solo espacios o caracteres de control).
+    """
+    if not query or not isinstance(query, str):
+        return ""
+
+    # 1) Quitar caracteres de control.
+    q = _CONTROL_CHARS_RE.sub(" ", query)
+
+    # 2) Colapsar espacios.
+    q = _WHITESPACE_RE.sub(" ", q).strip()
+    if not q:
+        return ""
+
+    # 3) Balancear comillas dobles (operador de frase exacta de Google).
+    q = _balance_quotes(q)
+
+    # 4) Truncar a longitud segura, sin partir palabras, y rebalancear
+    #    por si el corte deja una comilla huérfana.
+    if len(q) > MAX_QUERY_LENGTH:
+        q = q[:MAX_QUERY_LENGTH].rsplit(" ", 1)[0].strip()
+        q = _balance_quotes(q)
+
+    return q
+
+
+def _balance_quotes(q: str) -> str:
+    """
+    Si `q` tiene un número IMPAR de comillas dobles, quita la ÚLTIMA
+    para dejar la sintaxis de Google válida. Con un número par no
+    toca nada (incluidas queries con varias frases exactas legítimas,
+    p.ej. '"tienda online" -"qué es" -"guía"').
+    """
+    if q.count('"') % 2 == 0:
+        return q
+    idx = q.rfind('"')
+    return (q[:idx] + q[idx + 1:]).strip()
